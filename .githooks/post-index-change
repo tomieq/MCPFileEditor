@@ -1,0 +1,46 @@
+#!/bin/sh
+set -eu
+
+working_tree_updated="${1:-0}"
+
+# Interesuje nas tylko zapis indeksu bez modyfikacji working tree przez Gita.
+# Dla zwykłego `git add` Git wywołuje ten hook jako `post-index-change 0 0`.
+[ "$working_tree_updated" = "0" ] || exit 0
+
+repo_root=$(git rev-parse --show-toplevel)
+git_dir=$(git rev-parse --git-dir)
+state_file="$git_dir/.swiftformat-post-index-change-state"
+
+current_file=$(mktemp)
+trap 'rm -f "$current_file"' EXIT HUP INT TERM
+
+# Bierzemy tylko aktualnie staged pliki .swift i ich stan w indeksie.
+git diff --cached --raw --no-renames --diff-filter=ACMR -- '*.swift' | LC_ALL=C sort > "$current_file"
+
+# Jeśli nic nie jest staged, tylko odświeżamy stan.
+if [ ! -s "$current_file" ]; then
+  cp "$current_file" "$state_file"
+  exit 0
+fi
+
+if [ -s "$state_file" ]; then
+  changed_paths=$(
+    awk -F '\t' '
+      NR==FNR { prev[$2] = $0; next }
+      { if (prev[$2] != $0) print $2 }
+    ' "$state_file" "$current_file"
+  )
+else
+  changed_paths=$(awk -F '\t' '{ print $2 }' "$current_file")
+fi
+
+cp "$current_file" "$state_file"
+
+[ -n "$changed_paths" ] || exit 0
+
+printf '%s\n' "$changed_paths" | while IFS= read -r path; do
+  [ -n "$path" ] || continue
+  [ -f "$repo_root/$path" ] || continue
+  echo "swiftformat $path" >&2
+  swiftformat "$repo_root/$path"
+done
