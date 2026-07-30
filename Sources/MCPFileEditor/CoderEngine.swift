@@ -15,9 +15,9 @@ enum CoderCommand: String {
     case read_file
     case rename_file
     case override_file
-    case create_file
+    case create_new_file
     case delete_file
-    case find_text_in_files
+    case file_glob_search
 }
 
 extension CoderCommand: CustomStringConvertible {
@@ -92,7 +92,7 @@ class CoderEngine: Engine {
                             ],
                             required: ["filepath", "content"])
         ),
-        .init(CoderCommand.create_file,
+        .init(CoderCommand.create_new_file,
               description: "Create a new file. Only use this when a file doesn't exist and should be created",
               inputSchema:
               ToolParameter(type: .object,
@@ -111,8 +111,8 @@ class CoderEngine: Engine {
                             ],
                             required: ["filepath"])
         ),
-        .init(CoderCommand.find_text_in_files,
-              description: "Use this tool if you need to search files in the project looking for a particular text. The result is a list of json (filepath, line, lineContent) containing paths to files that contain specified string toghether with part of the document that was matched ({\"filepath\": \"<PATH>\", \"mathingLine\": \"<LINE HERE>\"})",
+        .init(CoderCommand.file_glob_search,
+              description: "Use this tool if you need to search files for a particular text(no regex). The result is the json list (filepath, line, lineContent) containing paths to files and line numbers ({\"filepath\": \"<PATH>\", \"mathingLine\": \"<LINE HERE>\"})",
               inputSchema:
               ToolParameter(type: .object,
                             properties: [
@@ -193,7 +193,7 @@ class CoderEngine: Engine {
             try? content.write(toFile: filepath, atomically: true, encoding: .utf8)
             logger.d("💾🟠 Override file \(virtualPath)")
             dto = ToolResult(["The content has been written to \(virtualPath)"])
-        case .create_file:
+        case .create_new_file:
             struct Action: Codable {
                 let filepath: String
                 let content: String
@@ -226,7 +226,7 @@ class CoderEngine: Engine {
             try? FileManager.default.removeItem(atPath: filepath)
             logger.d("💾🔴 Delete file \(virtualPath)")
             dto = ToolResult(["File \(virtualPath) has been deleted"])
-        case .find_text_in_files:
+        case .file_glob_search:
             struct Action: Codable {
                 let search: String
             }
