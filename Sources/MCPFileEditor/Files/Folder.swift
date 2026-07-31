@@ -30,7 +30,7 @@ class Folder {
     private let fileManager = FileManager.default
 
     func files() -> [String] {
-        self.crawl(url: self.realUrl, prefix: "/")
+        self.crawl(url: self.realUrl, prefix: "")
     }
 
     func tree() -> String {

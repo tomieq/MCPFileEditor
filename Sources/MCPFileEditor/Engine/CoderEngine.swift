@@ -56,14 +56,14 @@ class CoderEngine: Engine {
                             required: [])
         ),
         .init(CoderCommand.list_paths,
-              description: "Use this tool to get list of files' paths are in the project. Tool returs a list of absolute paths.",
+              description: "Use this tool to get list of files' paths are in the project. Tool returs a list of relative paths.",
               inputSchema:
               ToolParameter(type: .object,
                             properties: [:],
                             required: [])
         ),
         .init(CoderCommand.find_file,
-              description: "Use this tool to find an absolute path for a file in the project",
+              description: "Use this tool to find an relative path for a file in the project",
               inputSchema:
               ToolParameter(type: .object,
                             properties: [
@@ -76,7 +76,7 @@ class CoderEngine: Engine {
               inputSchema:
               ToolParameter(type: .object,
                             properties: [
-                                "filepath": .init(type: .string, description: "The absolute path of the file to read")
+                                "filepath": .init(type: .string, description: "The relative path of the file to read")
                             ],
                             required: ["filepath"])
         ),
@@ -85,8 +85,8 @@ class CoderEngine: Engine {
               inputSchema:
               ToolParameter(type: .object,
                             properties: [
-                                "oldFilepath": .init(type: .string, description: "Current absolute path of the file"),
-                                "newFilepath": .init(type: .string, description: "New absolute path of to be set for the file")
+                                "oldFilepath": .init(type: .string, description: "Current relative path of the file"),
+                                "newFilepath": .init(type: .string, description: "New relative path of to be set for the file")
                             ],
                             required: ["oldFilepath", "newFilepath"])
         ),
@@ -95,7 +95,7 @@ class CoderEngine: Engine {
               inputSchema:
               ToolParameter(type: .object,
                             properties: [
-                                "filepath": .init(type: .string, description: "The absolute path of the file to write to"),
+                                "filepath": .init(type: .string, description: "The relative path of the file to write to"),
                                 "content": .init(type: .string, description: "The utf8 content to write")
                             ],
                             required: ["filepath", "content"])
@@ -105,7 +105,7 @@ class CoderEngine: Engine {
               inputSchema:
               ToolParameter(type: .object,
                             properties: [
-                                "filepath": .init(type: .string, description: "The absolute path of the file to create"),
+                                "filepath": .init(type: .string, description: "The relative path of the file to create"),
                                 "content": .init(type: .string, description: "The utf8 content to write")
                             ],
                             required: ["filepath", "content"])
@@ -115,7 +115,7 @@ class CoderEngine: Engine {
               inputSchema:
               ToolParameter(type: .object,
                             properties: [
-                                "filepath": .init(type: .string, description: "The absolute path of the file to delete")
+                                "filepath": .init(type: .string, description: "The relative path of the file to delete")
                             ],
                             required: ["filepath"])
         ),
