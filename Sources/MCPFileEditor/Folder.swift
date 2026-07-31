@@ -8,6 +8,7 @@ import Foundation
 import Logger
 import SwiftExtensions
 import Env
+import FileTree
 
 class Folder {
     private let logger = Logger(Folder.self)
@@ -32,6 +33,14 @@ class Folder {
         self.crawl(url: self.realUrl, prefix: "/")
     }
 
+    func tree() -> String {
+        FileTree(realUrl, configuration: .init(allowedFileExtensions: allowedExtensions,
+                                               showsEmptyFolders: false,
+                                               excludedFolders: excludedFolders))
+            .tree
+            .replacingOccurrences(of: realUrl.path().dropLast(), with: ".")
+    }
+
     func realPath(_ virtualPath: String) -> String {
         realUrl.appendingPathComponent(virtualPath).path()
     }
@@ -40,18 +49,22 @@ class Folder {
         realPath.replacingOccurrences(of: realUrl.path(), with: virtualUrl.path())
     }
 
+    func isAllowedFile(_ url: URL) -> Bool {
+        allowedExtensions.isEmpty || allowedExtensions.contains(url.pathExtension)
+    }
+
     private func crawl(url: URL, prefix: String) -> [String] {
         let files = (try? self.fileManager.contentsOfDirectory(at: url, includingPropertiesForKeys: [])) ?? []
         var output: [String] = []
         files.enumerated().forEach { index, fileUrl in
             let isDir = (try? fileUrl.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
             let filename = fileUrl.pathComponents.last ?? "nil"
-            guard filename.starts(with: ".").not else { return }
+//            guard filename.starts(with: ".").not else { return }
             if isDir, excludedFolders.contains(filename).not {
                 let newPrefix = prefix + filename + "/"
                 let fileUrl = url.appendingPathComponent(filename)
                 output.append(contentsOf: self.crawl(url: fileUrl, prefix: newPrefix))
-            } else {
+            } else if isAllowedFile(fileUrl) {
                 output.append(prefix + filename)
             }
         }

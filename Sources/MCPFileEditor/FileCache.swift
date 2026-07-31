@@ -52,8 +52,7 @@ class FileCache {
 
     private func load(virtualPath: String) {
         let path = folder.realPath(virtualPath)
-        let fileExtension = virtualPath.split("/").last?.split(".").last
-        if let fileExtension, folder.allowedExtensions.contains(fileExtension), let content = try? String(contentsOfFile: path) {
+        if folder.isAllowedFile(URL(fileURLWithPath: path)), let content = try? String(contentsOfFile: path) {
             self.cache[virtualPath] = content
             logger.d("🔁 Loaded content from \(virtualPath)")
         } else {

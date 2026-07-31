@@ -16,6 +16,7 @@ let package = Package(
         .package(url: "https://github.com/tomieq/Logger", .upToNextMajor(from: "1.1.0")),
         .package(url: "https://github.com/tomieq/Env", .upToNextMajor(from: "1.0.8")),
         .package(url: "https://github.com/tomieq/MCPServer", branch: "master"),
+        .package(url: "https://github.com/tomieq/FileTree", branch: "master"),
         .package(url: "https://github.com/aus-der-Technik/FileMonitor.git", from: "1.0.0")
     ],
     targets: [
@@ -26,6 +27,7 @@ let package = Package(
                     .product(name: "Swifter", package: "Swifter"),
                     .product(name: "Logger", package: "Logger"),
                     .product(name: "MCPServer", package: "MCPServer"),
+                    .product(name: "FileTree", package: "FileTree"),
                     .product(name: "FileMonitor", package: "FileMonitor")
                 ]),
         .executableTarget(

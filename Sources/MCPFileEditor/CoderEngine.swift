@@ -10,7 +10,8 @@ import Logger
 import MCPServer
 
 enum CoderCommand: String {
-    case list_files
+    case file_tree
+    case list_paths
     case find_file
     case read_file
     case rename_file
@@ -47,24 +48,31 @@ class CoderEngine: Engine {
     }
 
     let tools: [ToolsList.Schema] = [
-        .init(CoderCommand.list_files,
-              description: "Use this tool if you need to find out what files are in the project. Tool returs a list of absolute paths of all the files.",
+        .init(CoderCommand.file_tree,
+              description: "Use this tool to get a file tree of the project. Tool returns equivalent of `tree` command.",
+              inputSchema:
+              ToolParameter(type: .object,
+                            properties: [:],
+                            required: [])
+        ),
+        .init(CoderCommand.list_paths,
+              description: "Use this tool to get list of files' paths are in the project. Tool returs a list of absolute paths.",
               inputSchema:
               ToolParameter(type: .object,
                             properties: [:],
                             required: [])
         ),
         .init(CoderCommand.find_file,
-              description: "Use this tool if you need to get absolute path for a file. Provide filename or its part and you will get absolute paths of matching files.",
+              description: "Use this tool to find an absolute path for a file in the project",
               inputSchema:
               ToolParameter(type: .object,
                             properties: [
-                                "filename": .init(type: .string, description: "Filename or its part to search for")
+                                "filename": .init(type: .string, description: "Filename or its part to search for. No regex support")
                             ],
                             required: ["filepath"])
         ),
         .init(CoderCommand.read_file,
-              description: "Use this tool if you need to view the contents of an existing file.",
+              description: "Use this tool if you want to get the contents of file.",
               inputSchema:
               ToolParameter(type: .object,
                             properties: [
@@ -73,7 +81,7 @@ class CoderEngine: Engine {
                             required: ["filepath"])
         ),
         .init(CoderCommand.rename_file,
-              description: "Use this tool if you need to chnage the file's name or move the file within the project",
+              description: "Use this tool to rename or move the file within the project",
               inputSchema:
               ToolParameter(type: .object,
                             properties: [
@@ -83,7 +91,7 @@ class CoderEngine: Engine {
                             required: ["oldFilepath", "newFilepath"])
         ),
         .init(CoderCommand.override_file,
-              description: "Use this tool if you need to override the content of an existing file.",
+              description: "Use this tool to override the content of an existing file.",
               inputSchema:
               ToolParameter(type: .object,
                             properties: [
@@ -103,7 +111,7 @@ class CoderEngine: Engine {
                             required: ["filepath", "content"])
         ),
         .init(CoderCommand.delete_file,
-              description: "Use this tool if you need to completely delete a file",
+              description: "Use this tool to delete a file",
               inputSchema:
               ToolParameter(type: .object,
                             properties: [
@@ -112,7 +120,7 @@ class CoderEngine: Engine {
                             required: ["filepath"])
         ),
         .init(CoderCommand.file_glob_search,
-              description: "Use this tool if you need to search files for a particular text(no regex). The result is the json list (filepath, line, lineContent) containing paths to files and line numbers ({\"filepath\": \"<PATH>\", \"mathingLine\": \"<LINE HERE>\"})",
+              description: "Use this tool to search files for a particular text(no regex). The result is the json list (filepath, line, lineContent)",
               inputSchema:
               ToolParameter(type: .object,
                             properties: [
@@ -128,7 +136,11 @@ class CoderEngine: Engine {
         }
         let dto: ToolResult
         switch command {
-        case .list_files:
+        case .file_tree:
+            logger.d("🗄️ Tree of project's files")
+
+            dto = ToolResult([folder.tree()])
+        case .list_paths:
             logger.d("🗄️ List project's files")
 
             dto = ToolResult(folder.files())
