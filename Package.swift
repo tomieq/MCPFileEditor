@@ -10,7 +10,8 @@ let package = Package(
     ],
     products: [
         .library(name: "MCPFileEditor", targets: ["MCPFileEditor"]),
-        .library(name: "MCPGit", targets: ["MCPGit"])
+        .library(name: "MCPGit", targets: ["MCPGit"]),
+        .library(name: "MCPShell", targets: ["MCPShell"])
     ],
     dependencies: [
         .package(url: "https://github.com/tomieq/swifter", .upToNextMajor(from: "3.1.1")),
@@ -36,11 +37,16 @@ let package = Package(
                     .product(name: "Logger", package: "Logger"),
                     .product(name: "MCPServer", package: "MCPServer")
                 ]),
+        .target(name: "MCPShell",
+                dependencies: [
+                    .product(name: "MCPServer", package: "MCPServer")
+                ]),
         .executableTarget(
             name: "MCPFileEditorServer",
             dependencies: [
                 .target(name: "MCPFileEditor"),
                 .target(name: "MCPGit"),
+                .target(name: "MCPShell"),
                 .product(name: "Env", package: "Env")
             ]
         )
