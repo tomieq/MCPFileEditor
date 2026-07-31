@@ -9,7 +9,8 @@ let package = Package(
         .macOS(.v13)
     ],
     products: [
-        .library(name: "MCPFileEditor", targets: ["MCPFileEditor"])
+        .library(name: "MCPFileEditor", targets: ["MCPFileEditor"]),
+        .library(name: "MCPGit", targets: ["MCPGit"])
     ],
     dependencies: [
         .package(url: "https://github.com/tomieq/swifter", .upToNextMajor(from: "3.1.1")),
@@ -30,10 +31,16 @@ let package = Package(
                     .product(name: "FileTree", package: "FileTree"),
                     .product(name: "FileMonitor", package: "FileMonitor")
                 ]),
+        .target(name: "MCPGit",
+                dependencies: [
+                    .product(name: "Logger", package: "Logger"),
+                    .product(name: "MCPServer", package: "MCPServer")
+                ]),
         .executableTarget(
             name: "MCPFileEditorServer",
             dependencies: [
                 .target(name: "MCPFileEditor"),
+                .target(name: "MCPGit"),
                 .product(name: "Env", package: "Env")
             ]
         )
