@@ -15,7 +15,7 @@ class Folder {
     let realUrl: URL
     let allowedExtensions: [String]
     let excludedFolders = [
-        "venv", "runs", ".git"
+        "venv", "runs", ".git", ".build"
     ]
 
     init(config: FolderConfig) {
