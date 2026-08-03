@@ -130,12 +130,12 @@ class CoderEngine: Engine {
                             required: ["search"])
         ),
         .init(CoderCommand.apply_patch,
-              description: "Apply a standard unified diff to project-relative UTF-8 text files. The patch may modify, create, delete, or move files and does not require a Git repository. Use dryRun first when uncertain; patches apply only when every hunk exactly matches its source file.",
+              description: "Apply a unified diff to project-relative UTF-8 text files without requiring Git. Use ---/+++ headers; a/ and b/ path prefixes are optional. Standard @@ -oldStart,oldCount +newStart,newCount @@ headers are supported, as are minimal @@ context-matched hunks. Multiple hunks and files are supported. Hunks first match exactly, then may use unique nearby or whitespace-insensitive context matching. dryRun returns structured JSON with target paths, match positions, match strategies, and added/removed line counts.",
               inputSchema:
               ToolParameter(type: .object,
                             properties: [
-                                "patch": .init(type: .string, description: "A complete standard unified diff with --- and +++ file headers. Paths must be project-relative; Git a/ and b/ prefixes are accepted."),
-                                "dryRun": .init(type: .boolean, description: "Validate the patch without writing files. Defaults to false.")
+                                "patch": .init(type: .string, description: "A unified diff with --- and +++ file headers. Paths must be project-relative; a/ and b/ prefixes are optional. Prefer explicit line ranges; minimal @@ hunks need unique source context."),
+                                "dryRun": .init(type: .boolean, description: "Validate without writing and return structured JSON diagnostics. Defaults to false.")
                             ],
                             required: ["patch"])
         )
@@ -270,7 +270,7 @@ class CoderEngine: Engine {
             do {
                 let result = try UnifiedPatchApplier(rootURL: folder.realUrl).apply(patch, dryRun: dryRun)
                 logger.d("💾🩹 \(result.message)")
-                dto = ToolResult([result.message])
+                dto = ToolResult([dryRun ? result.structuredMessage : result.message])
             } catch {
                 dto = ToolResult(["Patch was not applied: \(error.localizedDescription)"])
             }

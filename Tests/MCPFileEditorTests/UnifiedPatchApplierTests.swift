@@ -110,4 +110,45 @@ final class UnifiedPatchApplierTests: XCTestCase {
             XCTAssertTrue($0.localizedDescription.contains("Hunk header count mismatch"))
         }
     }
+
+    func testAppliesWhitespaceInsensitiveContext() throws {
+        let existing = directory.appendingPathComponent("example.txt")
+        try "\told value\n".write(to: existing, atomically: true, encoding: .utf8)
+        let patch = """
+        --- a/example.txt
+        +++ b/example.txt
+        @@ -1 +1 @@
+        -    old value
+        +new value
+        """
+
+        _ = try UnifiedPatchApplier(rootURL: directory).apply(patch, dryRun: false)
+
+        XCTAssertEqual(try String(contentsOf: existing), "new value\n")
+    }
+
+    func testDryRunReturnsStructuredMatchMetadata() throws {
+        let existing = directory.appendingPathComponent("example.txt")
+        try "old value\n".write(to: existing, atomically: true, encoding: .utf8)
+        let patch = """
+        --- a/example.txt
+        +++ b/example.txt
+        @@ -1 +1 @@
+        -old value
+        +new value
+        """
+
+        let result = try UnifiedPatchApplier(rootURL: directory).apply(patch, dryRun: true)
+        let json = try JSONSerialization.jsonObject(with: try XCTUnwrap(result.structuredMessage.data(using: .utf8))) as? [String: Any]
+        let files = try XCTUnwrap(json?["files"] as? [[String: Any]])
+        let file = try XCTUnwrap(files.first)
+        let hunks = try XCTUnwrap(file["hunks"] as? [[String: Any]])
+
+        XCTAssertEqual(file["path"] as? String, "example.txt")
+        XCTAssertEqual(file["additions"] as? Int, 1)
+        XCTAssertEqual(file["removals"] as? Int, 1)
+        XCTAssertEqual(hunks.first?["matchedLine"] as? Int, 1)
+        XCTAssertEqual(hunks.first?["matchingStrategy"] as? String, "header-line")
+        XCTAssertEqual(try String(contentsOf: existing), "old value\n")
+    }
 }

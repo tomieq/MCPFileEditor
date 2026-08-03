@@ -37,7 +37,18 @@ struct UnifiedPatchApplier {
         return UnifiedPatchResult(
             filesChanged: changes.count,
             dryRun: dryRun,
-            paths: changes.map(\.summary)
+            paths: changes.map(\.summary),
+            report: PatchDryRunReport(files: changes.map { change in
+                PatchDryRunFile(path: relativePath(change.destinationURL ?? change.sourceURL ?? rootURL),
+                                operation: operation(sourceURL: change.sourceURL, destinationURL: change.destinationURL),
+                                additions: change.additions,
+                                removals: change.removals,
+                                hunks: change.hunkMatches.map {
+                                    PatchDryRunHunk(index: $0.index,
+                                                    matchedLine: $0.position + 1,
+                                                    matchingStrategy: $0.strategy.rawValue)
+                                })
+            })
         )
     }
 }
@@ -73,6 +84,21 @@ private extension UnifiedPatchApplier {
         let destinationURL: URL?
         let content: String?
         let summary: String
+        let hunkMatches: [HunkMatch]
+        let additions: Int
+        let removals: Int
+    }
+
+    struct HunkMatch {
+        enum Strategy: String {
+            case headerLine = "header-line"
+            case exactContext = "exact-context"
+            case whitespaceInsensitive = "whitespace-insensitive"
+        }
+
+        let index: Int
+        let position: Int
+        let strategy: Strategy
     }
 
     func parse(_ patch: String) throws -> [FilePatch] {
@@ -205,12 +231,15 @@ private extension UnifiedPatchApplier {
         }
 
         let original = try sourceURL.map(readFile) ?? TextFile(lines: [], lineEnding: "\n", hasTrailingNewline: true)
-        let updated = try applying(patch.hunks, to: original)
-        let content = destinationURL.map { _ in updated.serialized }
+        let application = try applying(patch.hunks, to: original)
+        let content = destinationURL.map { _ in application.file.serialized }
         return PreparedChange(sourceURL: sourceURL,
                               destinationURL: destinationURL,
                               content: content,
-                              summary: summary(sourceURL: sourceURL, destinationURL: destinationURL))
+                              summary: summary(sourceURL: sourceURL, destinationURL: destinationURL),
+                              hunkMatches: application.hunkMatches,
+                              additions: patch.hunks.reduce(0) { $0 + $1.lines.filter { $0.kind == .addition }.count },
+                              removals: patch.hunks.reduce(0) { $0 + $1.lines.filter { $0.kind == .removal }.count })
     }
 
     func projectURL(for path: String) throws -> URL {
@@ -235,41 +264,44 @@ private extension UnifiedPatchApplier {
         return TextFile(lines: lines, lineEnding: lineEnding, hasTrailingNewline: hasTrailingNewline)
     }
 
-    func applying(_ hunks: [Hunk], to original: TextFile) throws -> TextFile {
+    func applying(_ hunks: [Hunk], to original: TextFile) throws -> AppliedTextFile {
         var lines = original.lines
         var trailingNewline = original.hasTrailingNewline
         var offset = 0
+        var hunkMatches: [HunkMatch] = []
 
         for (hunkIndex, hunk) in hunks.enumerated() {
-            let position = try position(for: hunk, in: lines, offset: offset, hunkIndex: hunkIndex + 1)
-            var cursor = position
+            let hunkMatch = try position(for: hunk, in: lines, offset: offset, hunkIndex: hunkIndex + 1)
+            hunkMatches.append(hunkMatch)
+            var cursor = hunkMatch.position
             var additions: [String] = []
 
             for line in hunk.lines {
                 switch line.kind {
                 case .context:
-                    try match(line.content, at: cursor, in: lines)
+                    try match(line.content, at: cursor, in: lines, strategy: hunkMatch.strategy)
                     cursor += 1
                     additions.append(line.content)
                 case .removal:
-                    try match(line.content, at: cursor, in: lines)
+                    try match(line.content, at: cursor, in: lines, strategy: hunkMatch.strategy)
                     cursor += 1
                 case .addition:
                     additions.append(line.content)
                 }
             }
 
-            lines.replaceSubrange(position..<cursor, with: additions)
+            lines.replaceSubrange(hunkMatch.position..<cursor, with: additions)
             offset += hunk.newCount - hunk.oldCount
             if hunk.lines.last?.hasTrailingNewline == false,
                hunk.lines.last?.kind != .removal {
                 trailingNewline = false
             }
         }
-        return TextFile(lines: lines, lineEnding: original.lineEnding, hasTrailingNewline: trailingNewline)
+        return AppliedTextFile(file: TextFile(lines: lines, lineEnding: original.lineEnding, hasTrailingNewline: trailingNewline),
+                               hunkMatches: hunkMatches)
     }
 
-    func position(for hunk: Hunk, in lines: [String], offset: Int, hunkIndex: Int) throws -> Int {
+    func position(for hunk: Hunk, in lines: [String], offset: Int, hunkIndex: Int) throws -> HunkMatch {
         let expected = hunk.lines
             .filter { $0.kind != .addition }
             .map(\.content)
@@ -277,7 +309,10 @@ private extension UnifiedPatchApplier {
         if let oldStart = hunk.oldStart {
             let declaredPosition = oldStart == 0 ? 0 : oldStart - 1 + offset
             if (0...lines.count).contains(declaredPosition), matches(expected, at: declaredPosition, in: lines) {
-                return declaredPosition
+                return HunkMatch(index: hunkIndex, position: declaredPosition, strategy: .headerLine)
+            }
+            if (0...lines.count).contains(declaredPosition), matchesIgnoringWhitespace(expected, at: declaredPosition, in: lines) {
+                return HunkMatch(index: hunkIndex, position: declaredPosition, strategy: .whitespaceInsensitive)
             }
         }
 
@@ -285,13 +320,14 @@ private extension UnifiedPatchApplier {
             throw UnifiedPatchError.applyFailed("Hunk \(hunkIndex) has no source context. Add an explicit line range for an addition-only hunk, for example @@ -0,0 +1,1 @@.")
         }
 
-        let positions = matchingPositions(for: expected, in: lines)
-        if positions.count == 1 {
-            return positions[0]
+        let exactPositions = matchingPositions(for: expected, in: lines)
+        if let position = try preferredPosition(from: exactPositions, declaredStart: hunk.oldStart.map { $0 - 1 + offset }, hunkIndex: hunkIndex) {
+            return HunkMatch(index: hunkIndex, position: position, strategy: .exactContext)
         }
-        if positions.count > 1 {
-            let candidates = positions.prefix(3).map { String($0 + 1) }.joined(separator: ", ")
-            throw UnifiedPatchError.applyFailed("Hunk \(hunkIndex) matches multiple locations (lines \(candidates)). Add more unchanged context or correct its line range.")
+
+        let whitespaceInsensitivePositions = matchingPositions(for: expected, in: lines, ignoringWhitespace: true)
+        if let position = try preferredPosition(from: whitespaceInsensitivePositions, declaredStart: hunk.oldStart.map { $0 - 1 + offset }, hunkIndex: hunkIndex) {
+            return HunkMatch(index: hunkIndex, position: position, strategy: .whitespaceInsensitive)
         }
 
         let expectedLine = expected[0]
@@ -303,9 +339,27 @@ private extension UnifiedPatchApplier {
         throw UnifiedPatchError.applyFailed("Hunk \(hunkIndex) could not find its source context. Expected to find \(quoted(expectedLine)).")
     }
 
-    func matchingPositions(for expected: [String], in lines: [String]) -> [Int] {
+    func preferredPosition(from positions: [Int], declaredStart: Int?, hunkIndex: Int) throws -> Int? {
+        guard positions.isEmpty.not else { return nil }
+        guard positions.count > 1 else { return positions[0] }
+        guard let declaredStart else {
+            let candidates = positions.prefix(3).map { String($0 + 1) }.joined(separator: ", ")
+            throw UnifiedPatchError.applyFailed("Hunk \(hunkIndex) matches multiple locations (lines \(candidates)). Add more unchanged context or an explicit hunk range.")
+        }
+
+        let sorted = positions.sorted { abs($0 - declaredStart) < abs($1 - declaredStart) }
+        if sorted.count == 1 || abs(sorted[0] - declaredStart) < abs(sorted[1] - declaredStart) {
+            return sorted[0]
+        }
+        let candidates = sorted.prefix(3).map { String($0 + 1) }.joined(separator: ", ")
+        throw UnifiedPatchError.applyFailed("Hunk \(hunkIndex) has equally close matches at lines \(candidates). Add more unchanged context or correct its line range.")
+    }
+
+    func matchingPositions(for expected: [String], in lines: [String], ignoringWhitespace: Bool = false) -> [Int] {
         guard expected.count <= lines.count else { return [] }
-        return (0...(lines.count - expected.count)).filter { matches(expected, at: $0, in: lines) }
+        return (0...(lines.count - expected.count)).filter {
+            ignoringWhitespace ? matchesIgnoringWhitespace(expected, at: $0, in: lines) : matches(expected, at: $0, in: lines)
+        }
     }
 
     func matches(_ expected: [String], at index: Int, in lines: [String]) -> Bool {
@@ -313,15 +367,29 @@ private extension UnifiedPatchApplier {
         return expected.enumerated().allSatisfy { offset, line in lines[index + offset] == line }
     }
 
+    func matchesIgnoringWhitespace(_ expected: [String], at index: Int, in lines: [String]) -> Bool {
+        guard index >= 0, index + expected.count <= lines.count else { return false }
+        return expected.enumerated().allSatisfy { offset, line in
+            normalizedWhitespace(line) == normalizedWhitespace(lines[index + offset])
+        }
+    }
+
     func quoted(_ line: String) -> String {
         "'\(line.isEmpty ? "<empty line>" : line)'"
     }
 
-    func match(_ expected: String, at index: Int, in lines: [String]) throws {
+    func normalizedWhitespace(_ value: String) -> String {
+        value.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+    }
+
+    func match(_ expected: String, at index: Int, in lines: [String], strategy: HunkMatch.Strategy) throws {
         guard index < lines.count else {
             throw UnifiedPatchError.applyFailed("Hunk extends past the end of the source file")
         }
-        guard lines[index] == expected else {
+        let matches = strategy == .whitespaceInsensitive
+            ? normalizedWhitespace(lines[index]) == normalizedWhitespace(expected)
+            : lines[index] == expected
+        guard matches else {
             throw UnifiedPatchError.applyFailed("Hunk does not match source file at line \(index + 1): expected \(quoted(expected)), found \(quoted(lines[index])).")
         }
     }
@@ -337,8 +405,9 @@ private extension UnifiedPatchApplier {
     }
 
     func summary(sourceURL: URL?, destinationURL: URL?) -> String {
+        let operation = operation(sourceURL: sourceURL, destinationURL: destinationURL)
         switch (sourceURL, destinationURL) {
-        case let (.some(source), .some(destination)) where source == destination:
+        case let (_, .some(destination)) where operation == "updated":
             return "updated \(relativePath(destination))"
         case let (.some(source), .some(destination)):
             return "moved \(relativePath(source)) to \(relativePath(destination))"
@@ -348,6 +417,16 @@ private extension UnifiedPatchApplier {
             return "deleted \(relativePath(source))"
         case (.none, .none):
             return "no file changes"
+        }
+    }
+
+    func operation(sourceURL: URL?, destinationURL: URL?) -> String {
+        switch (sourceURL, destinationURL) {
+        case let (.some(source), .some(destination)) where source == destination: return "updated"
+        case (.some, .some): return "moved"
+        case (.none, .some): return "created"
+        case (.some, .none): return "deleted"
+        case (.none, .none): return "none"
         }
     }
 
@@ -364,17 +443,47 @@ private extension UnifiedPatchApplier {
             lines.joined(separator: lineEnding) + (hasTrailingNewline ? lineEnding : "")
         }
     }
+
+    struct AppliedTextFile {
+        let file: TextFile
+        let hunkMatches: [HunkMatch]
+    }
 }
 
 struct UnifiedPatchResult {
     let filesChanged: Int
     let dryRun: Bool
     let paths: [String]
+    let report: PatchDryRunReport
 
     var message: String {
         let prefix = dryRun ? "Patch validated without changes" : "Patch applied"
         return "\(prefix) to \(filesChanged) file(s):\n\(paths.joined(separator: "\n"))"
     }
+
+    var structuredMessage: String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return String(data: (try? encoder.encode(report)) ?? Data(), encoding: .utf8) ?? "{}"
+    }
+}
+
+struct PatchDryRunReport: Encodable {
+    let files: [PatchDryRunFile]
+}
+
+struct PatchDryRunFile: Encodable {
+    let path: String
+    let operation: String
+    let additions: Int
+    let removals: Int
+    let hunks: [PatchDryRunHunk]
+}
+
+struct PatchDryRunHunk: Encodable {
+    let index: Int
+    let matchedLine: Int
+    let matchingStrategy: String
 }
 
 private enum UnifiedPatchError: LocalizedError {
