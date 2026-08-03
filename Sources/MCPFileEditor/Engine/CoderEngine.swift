@@ -52,82 +52,82 @@ class CoderEngine: Engine {
 
     let tools: [ToolsList.Schema] = [
         .init(CoderCommand.file_tree,
-              description: "Use this tool to get a file tree of the project. Tool returns equivalent of `tree` command.",
+              description: "List the project directory tree.",
               inputSchema:
               ToolParameter(type: .object,
                             properties: [:],
                             required: [])
         ),
         .init(CoderCommand.list_paths,
-              description: "Use this tool to get list of files' paths are in the project. Tool returs a list of relative paths.",
+              description: "List all project-relative file paths.",
               inputSchema:
               ToolParameter(type: .object,
                             properties: [:],
                             required: [])
         ),
         .init(CoderCommand.find_file,
-              description: "Use this tool to find an relative path for a file in the project",
+              description: "Find a project-relative path by filename or partial name.",
               inputSchema:
               ToolParameter(type: .object,
                             properties: [
-                                "filename": .init(type: .string, description: "Filename or its part to search for. No regex support")
+                                "filename": .init(type: .string, description: "Filename or partial filename to search for. No regex.")
                             ],
-                            required: ["filepath"])
+                            required: ["filename"])
         ),
         .init(CoderCommand.read_file,
-              description: "Use this tool if you want to get the contents of file.",
+              description: "Read the contents of a file.",
               inputSchema:
               ToolParameter(type: .object,
                             properties: [
-                                "filepath": .init(type: .string, description: "The relative path of the file to read")
+                                "filepath": .init(type: .string, description: "Project-relative path of the file to read.")
                             ],
                             required: ["filepath"])
         ),
         .init(CoderCommand.rename_file,
-              description: "Use this tool to rename or move the file within the project",
+              description: "Rename or move a project file.",
               inputSchema:
               ToolParameter(type: .object,
                             properties: [
-                                "oldFilepath": .init(type: .string, description: "Current relative path of the file"),
-                                "newFilepath": .init(type: .string, description: "New relative path of to be set for the file")
+                                "oldFilepath": .init(type: .string, description: "Current project-relative path."),
+                                "newFilepath": .init(type: .string, description: "New project-relative path.")
                             ],
                             required: ["oldFilepath", "newFilepath"])
         ),
         .init(CoderCommand.override_file,
-              description: "Use this tool to override the content of an existing file.",
+              description: "Replace the entire contents of an existing file.",
               inputSchema:
               ToolParameter(type: .object,
                             properties: [
-                                "filepath": .init(type: .string, description: "The relative path of the file to write to"),
-                                "content": .init(type: .string, description: "The utf8 content to write")
+                                "filepath": .init(type: .string, description: "Project-relative path of the file to overwrite."),
+                                "content": .init(type: .string, description: "UTF-8 content to write.")
                             ],
                             required: ["filepath", "content"])
         ),
         .init(CoderCommand.create_new_file,
-              description: "Create a new file. Only use this when a file doesn't exist and should be created",
+              description: "Create a new file. Fails if the file already exists.",
               inputSchema:
               ToolParameter(type: .object,
                             properties: [
-                                "filepath": .init(type: .string, description: "The relative path of the file to create"),
-                                "content": .init(type: .string, description: "The utf8 content to write")
+                                "filepath": .init(type: .string, description: "Project-relative path of the file to create."),
+                                "content": .init(type: .string, description: "UTF-8 content to write.")
                             ],
                             required: ["filepath", "content"])
         ),
         .init(CoderCommand.delete_file,
-              description: "Use this tool to delete a file",
+              description: "Delete a file from the project.",
               inputSchema:
               ToolParameter(type: .object,
                             properties: [
-                                "filepath": .init(type: .string, description: "The relative path of the file to delete")
+                                "filepath": .init(type: .string, description: "Project-relative path of the file to delete.")
                             ],
                             required: ["filepath"])
         ),
         .init(CoderCommand.file_glob_search,
-              description: "Use this tool to search files for a particular text(no regex). The result is the json list (filepath, line, lineContent)",
+              description: "Search all project files for exact text matches; no regex.",
               inputSchema:
               ToolParameter(type: .object,
                             properties: [
-                                "search": .init(type: .string, description: "The text to search for")
+                                "search": .init(type: .string, description: "Text to search for.")
                             ],
                             required: ["search"])
         ),
@@ -156,7 +156,7 @@ class CoderEngine: Engine {
                             required: ["filepath", "find", "replace"])
         ),
         .init(CoderCommand.replace_all,
-              description: "Replace exact text in every cached, tracked project file containing it. The cached total must exactly equal expectedMatches, then every file is revalidated from disk before any write. Always use dryRun first; the result lists affected files and replacement counts.",
+              description: "Replace exact text across all cached tracked files. Use with caution: the cached total must exactly match expectedMatches, and all files are revalidated from disk before any write. Always dry-run first.",
               inputSchema:
               ToolParameter(type: .object,
                             properties: [

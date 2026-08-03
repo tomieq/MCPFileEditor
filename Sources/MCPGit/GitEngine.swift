@@ -38,12 +38,12 @@ final class GitEngine: Engine {
     }
 
     let tools: [ToolsList.Schema] = [
-        .init(GitCommand.repositoryInfo, description: "Get repository root, HEAD, branch/detached state, and shallow-clone state.", inputSchema: emptySchema),
-        .init(GitCommand.status, description: "Get structured porcelain status, branch tracking, and optionally ignored files.", inputSchema: .init(properties: [
+        .init(GitCommand.repositoryInfo, description: "Get repository root, HEAD, branch state, and shallow-clone status.", inputSchema: emptySchema),
+        .init(GitCommand.status, description: "Get Git status, branch tracking, and optionally ignored files.", inputSchema: .init(properties: [
             "includeIgnored": property(.boolean, "Include ignored files."),
             "pathspecs": property(.array, "Optional project-relative paths to limit the status.")
         ], required: [])),
-        .init(GitCommand.diff, description: "Read a working-tree, staged, or two-ref diff. A refs diff requires baseRef and targetRef.", inputSchema: .init(properties: [
+        .init(GitCommand.diff, description: "Read a working-tree, staged, or two-revision diff. No changes are made.", inputSchema: .init(properties: [
             "mode": property(.string, "working, staged, or refs.", values: ["working", "staged", "refs"]),
             "baseRef": property(.string, "Base revision; required when mode is refs."),
             "targetRef": property(.string, "Target revision; required when mode is refs."),
@@ -102,7 +102,7 @@ final class GitEngine: Engine {
             "rightRef": property(.string, "Second revision."),
             "all": property(.boolean, "Return all merge bases.")
         ], required: ["leftRef", "rightRef"])),
-        .init(GitCommand.compare, description: "Compare two revisions, including commit range and optional diff.", inputSchema: .init(properties: [
+        .init(GitCommand.compare, description: "Compare two revisions and optionally include the diff.", inputSchema: .init(properties: [
             "baseRef": property(.string, "Base revision."),
             "targetRef": property(.string, "Target revision."),
             "pathspecs": property(.array, "Optional project-relative paths."),
@@ -111,8 +111,7 @@ final class GitEngine: Engine {
             "nameOnly": property(.boolean, "Return changed paths only."),
             "contextLines": property(.integer, "Patch context lines, from 0 through 100.")
         ], required: ["baseRef", "targetRef"])),
-        /*
-         // disabled
+        /* disabled
         .init(GitCommand.conflicts, description: "List files with unresolved Git conflicts.", inputSchema: .init(properties: [
             "pathspecs": property(.array, "Optional project-relative paths.")
         ], required: [])),

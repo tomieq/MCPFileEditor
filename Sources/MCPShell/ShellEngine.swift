@@ -16,11 +16,11 @@ final class ShellEngine: Engine {
         self.projectDirectory = projectDirectory
     }
 
-    let instructions = "Run shell commands with the configured project directory as the fixed initial working directory. This tool may change files and run arbitrary executables. It is not a filesystem sandbox."
+    let instructions = "Run shell commands with the configured project directory as the fixed initial working directory. Use this only when no dedicated MCP tool fits. This tool may change files and run arbitrary executables. It is not a filesystem sandbox."
 
     let tools: [ToolsList.Schema] = [
         .init(ShellCommand.run,
-              description: "Run a zsh command from the configured project directory. The command may use shell syntax such as pipes and redirects. The working directory cannot be supplied by the caller. Optional environment variables apply only to this command.",
+              description: "Run a zsh command in the fixed project directory. Use this only as a fallback when no dedicated tool fits. Supports shell syntax such as pipes and redirects. The working directory cannot be supplied by the caller. Optional environment variables apply only to this command.",
               inputSchema: .init(properties: [
                   "command": .init(type: .string, description: "Shell command to run from the project directory."),
                   "environment": .init(type: .object, description: "String-to-string environment variables for this command only."),
