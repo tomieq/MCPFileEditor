@@ -14,14 +14,15 @@ class Folder {
     private let logger = Logger(Folder.self)
     let realUrl: URL
     let allowedExtensions: [String]
-    let excludedFolders = [
-        "venv", "runs", ".git", ".build"
-    ]
+    let excludedFolders: [String]
 
     init(config: FolderConfig) {
         let projectPath = config.projectPath
         let extensions = config.fileExtensions.split(",").map{ $0.trimmed }
         logger.d("Starting in \(projectPath) with extensions: \(extensions)")
+        self.excludedFolders = config.excludedFolders ?? [
+            "venv", "runs", ".git", ".build", ".swiftpm"
+        ]
         self.realUrl = URL(fileURLWithPath: projectPath)
         self.allowedExtensions = extensions
     }
