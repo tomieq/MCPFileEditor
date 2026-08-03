@@ -151,4 +151,34 @@ final class UnifiedPatchApplierTests: XCTestCase {
         XCTAssertEqual(hunks.first?["matchingStrategy"] as? String, "header-line")
         XCTAssertEqual(try String(contentsOf: existing), "old value\n")
     }
+
+    func testTextReplacementRequiresAnExactMatchCount() throws {
+        let existing = directory.appendingPathComponent("example.txt")
+        try "old value\nold value\n".write(to: existing, atomically: true, encoding: .utf8)
+        let replacer = TextReplacer(rootURL: directory)
+
+        XCTAssertThrowsError(try replacer.replace(filepath: "example.txt",
+                                                  find: "old value",
+                                                  replacement: "new value",
+                                                  expectedMatches: 1,
+                                                  replaceAll: false,
+                                                  dryRun: false))
+        XCTAssertEqual(try String(contentsOf: existing), "old value\nold value\n")
+    }
+
+    func testTextReplacementCanReplaceAllVerifiedMatches() throws {
+        let existing = directory.appendingPathComponent("example.txt")
+        try "old value\nold value\n".write(to: existing, atomically: true, encoding: .utf8)
+
+        let result = try TextReplacer(rootURL: directory).replace(filepath: "example.txt",
+                                                                  find: "old value",
+                                                                  replacement: "new value",
+                                                                  expectedMatches: 2,
+                                                                  replaceAll: true,
+                                                                  dryRun: false)
+
+        XCTAssertEqual(result.matches, 2)
+        XCTAssertEqual(result.replacements, 2)
+        XCTAssertEqual(try String(contentsOf: existing), "new value\nnew value\n")
+    }
 }

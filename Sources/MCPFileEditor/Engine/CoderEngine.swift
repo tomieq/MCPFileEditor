@@ -20,6 +20,7 @@ enum CoderCommand: String {
     case delete_file
     case file_glob_search
     case apply_patch
+    case replace_text
 }
 
 extension CoderCommand: CustomStringConvertible {
@@ -138,6 +139,20 @@ class CoderEngine: Engine {
                                 "dryRun": .init(type: .boolean, description: "Validate without writing and return structured JSON diagnostics. Defaults to false.")
                             ],
                             required: ["patch"])
+        ),
+        .init(CoderCommand.replace_text,
+              description: "Replace exact text in one project-relative UTF-8 file. For safety, the current number of matches must exactly equal expectedMatches (which defaults to 1). Set replaceAll only when every verified match should change. Use dryRun to validate and return structured JSON without writing.",
+              inputSchema:
+              ToolParameter(type: .object,
+                            properties: [
+                                "filepath": .init(type: .string, description: "The project-relative path of the existing UTF-8 file."),
+                                "find": .init(type: .string, description: "The non-empty exact text to find."),
+                                "replace": .init(type: .string, description: "The text that replaces the match; it may be empty."),
+                                "expectedMatches": .init(type: .integer, description: "Exact number of current matches required before writing. Defaults to 1."),
+                                "replaceAll": .init(type: .boolean, description: "Replace every match after expectedMatches validation. Defaults to false."),
+                                "dryRun": .init(type: .boolean, description: "Validate without writing and return structured JSON. Defaults to false.")
+                            ],
+                            required: ["filepath", "find", "replace"])
         )
     ]
 
@@ -273,6 +288,32 @@ class CoderEngine: Engine {
                 dto = ToolResult([dryRun ? result.structuredMessage : result.message])
             } catch {
                 dto = ToolResult(["Patch was not applied: \(error.localizedDescription)"])
+            }
+        case .replace_text:
+            struct Action: Codable {
+                let filepath: String
+                let find: String
+                let replace: String
+                let expectedMatches: Int?
+                let replaceAll: Bool?
+                let dryRun: Bool?
+            }
+            let command: Command<Action> = try body.decode()
+            let arguments = command.params?.arguments
+
+            do {
+                let result = try TextReplacer(rootURL: folder.realUrl).replace(
+                    filepath: arguments?.filepath ?? "",
+                    find: arguments?.find ?? "",
+                    replacement: arguments?.replace ?? "",
+                    expectedMatches: arguments?.expectedMatches ?? 1,
+                    replaceAll: arguments?.replaceAll ?? false,
+                    dryRun: arguments?.dryRun ?? false
+                )
+                logger.d("💾🔁 \(result.message)")
+                dto = ToolResult([result.dryRun ? result.structuredMessage : result.message])
+            } catch {
+                dto = ToolResult(["Text was not replaced: \(error.localizedDescription)"])
             }
         }
         return dto
