@@ -49,6 +49,10 @@ let package = Package(
                 .target(name: "MCPShell"),
                 .product(name: "Env", package: "Env")
             ]
+        ),
+        .testTarget(
+            name: "MCPFileEditorTests",
+            dependencies: ["MCPFileEditor"]
         )
     ],
     swiftLanguageModes: [.v5]

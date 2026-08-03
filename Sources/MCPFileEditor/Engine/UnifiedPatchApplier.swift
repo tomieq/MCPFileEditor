@@ -50,7 +50,7 @@ private extension UnifiedPatchApplier {
     }
 
     struct Hunk {
-        let oldStart: Int
+        let oldStart: Int?
         let oldCount: Int
         let newCount: Int
         let lines: [HunkLine]
@@ -102,7 +102,7 @@ private extension UnifiedPatchApplier {
             }
 
             var hunks: [Hunk] = []
-            while index < lines.count, lines[index].hasPrefix("@@ ") {
+            while index < lines.count, lines[index].hasPrefix("@@") {
                 let header = try hunkHeader(lines[index])
                 index += 1
                 var hunkLines: [HunkLine] = []
@@ -127,10 +127,14 @@ private extension UnifiedPatchApplier {
 
                 let oldLineCount = hunkLines.filter { $0.kind != .addition }.count
                 let newLineCount = hunkLines.filter { $0.kind != .removal }.count
-                guard oldLineCount == header.oldCount, newLineCount == header.newCount else {
-                    throw UnifiedPatchError.invalidPatch("Hunk line counts do not match its header")
+                if let oldCount = header.oldCount, let newCount = header.newCount,
+                   oldLineCount != oldCount || newLineCount != newCount {
+                    throw UnifiedPatchError.invalidPatch("Hunk header count mismatch: header declares \(oldCount) old and \(newCount) new line(s), but its body contains \(oldLineCount) old and \(newLineCount) new line(s). Use @@ -start,oldCount +start,newCount @@.")
                 }
-                hunks.append(Hunk(oldStart: header.oldStart, oldCount: header.oldCount, newCount: header.newCount, lines: hunkLines))
+                hunks.append(Hunk(oldStart: header.oldStart,
+                                  oldCount: header.oldCount ?? oldLineCount,
+                                  newCount: header.newCount ?? newLineCount,
+                                  lines: hunkLines))
             }
 
             guard hunks.isEmpty.not else {
@@ -161,10 +165,16 @@ private extension UnifiedPatchApplier {
         return path
     }
 
-    func hunkHeader(_ line: String) throws -> (oldStart: Int, oldCount: Int, newCount: Int) {
+    func hunkHeader(_ line: String) throws -> (oldStart: Int?, oldCount: Int?, newCount: Int?) {
+        guard line == "@@" || line.hasPrefix("@@ ") else {
+            throw UnifiedPatchError.invalidPatch("Invalid hunk header: \(line). Expected @@ -oldStart,oldCount +newStart,newCount @@.")
+        }
+        guard line != "@@" else {
+            return (nil, nil, nil)
+        }
         let parts = line.split(separator: " ", omittingEmptySubsequences: true)
         guard parts.count >= 3, parts[0] == "@@", parts[1].first == "-", parts[2].first == "+" else {
-            throw UnifiedPatchError.invalidPatch("Malformed hunk header: \(line)")
+            throw UnifiedPatchError.invalidPatch("Invalid hunk header: \(line). Expected @@ -oldStart,oldCount +newStart,newCount @@, or @@ for context-based matching.")
         }
         let oldRange = try lineRange(String(parts[1].dropFirst()))
         let newRange = try lineRange(String(parts[2].dropFirst()))
@@ -230,11 +240,8 @@ private extension UnifiedPatchApplier {
         var trailingNewline = original.hasTrailingNewline
         var offset = 0
 
-        for hunk in hunks {
-            let position = hunk.oldStart == 0 ? 0 : hunk.oldStart - 1 + offset
-            guard (0...lines.count).contains(position) else {
-                throw UnifiedPatchError.applyFailed("Hunk starts outside the source file at line \(hunk.oldStart)")
-            }
+        for (hunkIndex, hunk) in hunks.enumerated() {
+            let position = try position(for: hunk, in: lines, offset: offset, hunkIndex: hunkIndex + 1)
             var cursor = position
             var additions: [String] = []
 
@@ -262,12 +269,60 @@ private extension UnifiedPatchApplier {
         return TextFile(lines: lines, lineEnding: original.lineEnding, hasTrailingNewline: trailingNewline)
     }
 
+    func position(for hunk: Hunk, in lines: [String], offset: Int, hunkIndex: Int) throws -> Int {
+        let expected = hunk.lines
+            .filter { $0.kind != .addition }
+            .map(\.content)
+
+        if let oldStart = hunk.oldStart {
+            let declaredPosition = oldStart == 0 ? 0 : oldStart - 1 + offset
+            if (0...lines.count).contains(declaredPosition), matches(expected, at: declaredPosition, in: lines) {
+                return declaredPosition
+            }
+        }
+
+        guard expected.isEmpty.not else {
+            throw UnifiedPatchError.applyFailed("Hunk \(hunkIndex) has no source context. Add an explicit line range for an addition-only hunk, for example @@ -0,0 +1,1 @@.")
+        }
+
+        let positions = matchingPositions(for: expected, in: lines)
+        if positions.count == 1 {
+            return positions[0]
+        }
+        if positions.count > 1 {
+            let candidates = positions.prefix(3).map { String($0 + 1) }.joined(separator: ", ")
+            throw UnifiedPatchError.applyFailed("Hunk \(hunkIndex) matches multiple locations (lines \(candidates)). Add more unchanged context or correct its line range.")
+        }
+
+        let expectedLine = expected[0]
+        if let oldStart = hunk.oldStart {
+            let lineNumber = max(1, oldStart + offset)
+            let actualLine = (0..<lines.count).contains(lineNumber - 1) ? lines[lineNumber - 1] : "<end of file>"
+            throw UnifiedPatchError.applyFailed("Hunk \(hunkIndex) failed near line \(lineNumber): expected \(quoted(expectedLine)), found \(quoted(actualLine)). Check surrounding whitespace/context or update the hunk range.")
+        }
+        throw UnifiedPatchError.applyFailed("Hunk \(hunkIndex) could not find its source context. Expected to find \(quoted(expectedLine)).")
+    }
+
+    func matchingPositions(for expected: [String], in lines: [String]) -> [Int] {
+        guard expected.count <= lines.count else { return [] }
+        return (0...(lines.count - expected.count)).filter { matches(expected, at: $0, in: lines) }
+    }
+
+    func matches(_ expected: [String], at index: Int, in lines: [String]) -> Bool {
+        guard index >= 0, index + expected.count <= lines.count else { return false }
+        return expected.enumerated().allSatisfy { offset, line in lines[index + offset] == line }
+    }
+
+    func quoted(_ line: String) -> String {
+        "'\(line.isEmpty ? "<empty line>" : line)'"
+    }
+
     func match(_ expected: String, at index: Int, in lines: [String]) throws {
         guard index < lines.count else {
             throw UnifiedPatchError.applyFailed("Hunk extends past the end of the source file")
         }
         guard lines[index] == expected else {
-            throw UnifiedPatchError.applyFailed("Hunk does not match source file at line \(index + 1)")
+            throw UnifiedPatchError.applyFailed("Hunk does not match source file at line \(index + 1): expected \(quoted(expected)), found \(quoted(lines[index])).")
         }
     }
 

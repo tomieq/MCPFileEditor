@@ -60,4 +60,54 @@ final class UnifiedPatchApplierTests: XCTestCase {
         XCTAssertThrowsError(try applier.apply(invalidPatch, dryRun: false))
         XCTAssertEqual(try String(contentsOf: existing), "one\n")
     }
+
+    func testAppliesRangeLessContextPatch() throws {
+        let existing = directory.appendingPathComponent("example.txt")
+        try "before\nold value\nafter\n".write(to: existing, atomically: true, encoding: .utf8)
+
+        let patch = """
+        --- a/example.txt
+        +++ b/example.txt
+        @@
+        -old value
+        +new value
+        """
+
+        _ = try UnifiedPatchApplier(rootURL: directory).apply(patch, dryRun: false)
+
+        XCTAssertEqual(try String(contentsOf: existing), "before\nnew value\nafter\n")
+    }
+
+    func testFindsAUniqueHunkWhenItsLineRangeIsOffset() throws {
+        let existing = directory.appendingPathComponent("example.txt")
+        try "inserted\nbefore\nold value\nafter\n".write(to: existing, atomically: true, encoding: .utf8)
+
+        let patch = """
+        --- a/example.txt
+        +++ b/example.txt
+        @@ -2,3 +2,3 @@
+         before
+        -old value
+        +new value
+         after
+        """
+
+        _ = try UnifiedPatchApplier(rootURL: directory).apply(patch, dryRun: false)
+
+        XCTAssertEqual(try String(contentsOf: existing), "inserted\nbefore\nnew value\nafter\n")
+    }
+
+    func testReportsHeaderCountMismatchesClearly() throws {
+        let patch = """
+        --- a/example.txt
+        +++ b/example.txt
+        @@ -1,2 +1,2 @@
+        -old value
+        +new value
+        """
+
+        XCTAssertThrowsError(try UnifiedPatchApplier(rootURL: directory).apply(patch, dryRun: true)) {
+            XCTAssertTrue($0.localizedDescription.contains("Hunk header count mismatch"))
+        }
+    }
 }
