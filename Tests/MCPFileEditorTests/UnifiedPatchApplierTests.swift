@@ -181,4 +181,25 @@ final class UnifiedPatchApplierTests: XCTestCase {
         XCTAssertEqual(result.replacements, 2)
         XCTAssertEqual(try String(contentsOf: existing), "new value\nnew value\n")
     }
+
+    func testProjectWideReplacementValidatesEveryCachedTargetBeforeWriting() throws {
+        let first = directory.appendingPathComponent("first.txt")
+        let second = directory.appendingPathComponent("second.txt")
+        try "old value\n".write(to: first, atomically: true, encoding: .utf8)
+        try "old value\n".write(to: second, atomically: true, encoding: .utf8)
+
+        let folder = Folder(config: .init(projectPath: directory.path, fileExtensions: "txt"))
+        let cache = FileCache(folder: folder)
+        try "changed externally\n".write(to: second, atomically: true, encoding: .utf8)
+
+        XCTAssertThrowsError(try TextReplacer(rootURL: directory).replaceAll(
+            targets: cache.replacementTargets("old value"),
+            find: "old value",
+            replacement: "new value",
+            expectedMatches: 2,
+            dryRun: false
+        ))
+        XCTAssertEqual(try String(contentsOf: first), "old value\n")
+        XCTAssertEqual(try String(contentsOf: second), "changed externally\n")
+    }
 }

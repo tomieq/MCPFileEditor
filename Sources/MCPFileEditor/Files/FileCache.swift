@@ -41,6 +41,15 @@ class FileCache {
         return results
     }
 
+    func replacementTargets(_ text: String) -> [TextReplacementTarget] {
+        guard text.isEmpty.not else { return [] }
+        return cache.compactMap { virtualPath, content in
+            let matchCount = content.components(separatedBy: text).count - 1
+            guard matchCount > 0 else { return nil }
+            return TextReplacementTarget(filepath: virtualPath, expectedMatches: matchCount)
+        }.sorted { $0.filepath < $1.filepath }
+    }
+
     func fileChanged(_ change: FolderChange) {
         switch change {
         case .deleted(let url):

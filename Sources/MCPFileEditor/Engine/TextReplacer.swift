@@ -58,6 +58,62 @@ struct TextReplacer {
                                      replaceAll: replaceAll,
                                      dryRun: dryRun)
     }
+
+    func replaceAll(targets: [TextReplacementTarget],
+                    find: String,
+                    replacement: String,
+                    expectedMatches: Int,
+                    dryRun: Bool) throws -> TextReplacementBatchResult {
+        guard find.isEmpty.not else {
+            throw TextReplacementError.invalidArgument("find must not be empty")
+        }
+        guard expectedMatches > 0 else {
+            throw TextReplacementError.invalidArgument("expectedMatches must be at least 1")
+        }
+        guard targets.isEmpty.not else {
+            throw TextReplacementError.matchCountMismatch(expected: expectedMatches, found: 0, filepath: "the cached project files")
+        }
+        guard Set(targets.map(\.filepath)).count == targets.count else {
+            throw TextReplacementError.invalidArgument("Cached replacement targets contain duplicate paths")
+        }
+
+        let cachedMatches = targets.reduce(0) { $0 + $1.expectedMatches }
+        guard cachedMatches == expectedMatches else {
+            throw TextReplacementError.matchCountMismatch(expected: expectedMatches, found: cachedMatches, filepath: "the cached project files")
+        }
+
+        let changes = try targets.map { target -> PreparedTextReplacement in
+            let url = try projectURL(for: target.filepath)
+            guard fileManager.fileExists(atPath: url.path) else {
+                throw TextReplacementError.fileNotFound(target.filepath)
+            }
+            guard let content = try? String(contentsOf: url, encoding: .utf8) else {
+                throw TextReplacementError.invalidUTF8(target.filepath)
+            }
+            let matchCount = occurrences(of: find, in: content)
+            guard matchCount == target.expectedMatches else {
+                throw TextReplacementError.matchCountMismatch(expected: target.expectedMatches, found: matchCount, filepath: target.filepath)
+            }
+            return PreparedTextReplacement(filepath: target.filepath,
+                                           url: url,
+                                           updatedContent: content.replacingOccurrences(of: find, with: replacement),
+                                           matches: matchCount)
+        }
+
+        if dryRun.not {
+            for change in changes {
+                try change.updatedContent.write(to: change.url, atomically: true, encoding: .utf8)
+            }
+        }
+
+        return TextReplacementBatchResult(files: changes.map {
+            TextReplacementResult(filepath: $0.filepath,
+                                  matches: $0.matches,
+                                  replacements: $0.matches,
+                                  replaceAll: true,
+                                  dryRun: dryRun)
+        })
+    }
 }
 
 private extension TextReplacer {
@@ -83,6 +139,18 @@ private extension TextReplacer {
         }
         return count
     }
+
+    struct PreparedTextReplacement {
+        let filepath: String
+        let url: URL
+        let updatedContent: String
+        let matches: Int
+    }
+}
+
+struct TextReplacementTarget {
+    let filepath: String
+    let expectedMatches: Int
 }
 
 struct TextReplacementResult: Encodable {
@@ -95,6 +163,21 @@ struct TextReplacementResult: Encodable {
     var message: String {
         let action = dryRun ? "Validated" : "Replaced"
         return "\(action) \(replacements) occurrence(s) in \(filepath)"
+    }
+
+    var structuredMessage: String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return String(data: (try? encoder.encode(self)) ?? Data(), encoding: .utf8) ?? "{}"
+    }
+}
+
+struct TextReplacementBatchResult: Encodable {
+    let files: [TextReplacementResult]
+
+    var message: String {
+        let replacements = files.reduce(0) { $0 + $1.replacements }
+        return "Replaced \(replacements) occurrence(s) across \(files.count) file(s)"
     }
 
     var structuredMessage: String {
