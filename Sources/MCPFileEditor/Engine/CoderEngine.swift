@@ -19,6 +19,7 @@ enum CoderCommand: String {
     case create_new_file
     case delete_file
     case file_glob_search
+    case apply_patch
 }
 
 extension CoderCommand: CustomStringConvertible {
@@ -127,6 +128,16 @@ class CoderEngine: Engine {
                                 "search": .init(type: .string, description: "The text to search for")
                             ],
                             required: ["search"])
+        ),
+        .init(CoderCommand.apply_patch,
+              description: "Apply a standard unified diff to project-relative UTF-8 text files. The patch may modify, create, delete, or move files and does not require a Git repository. Use dryRun first when uncertain; patches apply only when every hunk exactly matches its source file.",
+              inputSchema:
+              ToolParameter(type: .object,
+                            properties: [
+                                "patch": .init(type: .string, description: "A complete standard unified diff with --- and +++ file headers. Paths must be project-relative; Git a/ and b/ prefixes are accepted."),
+                                "dryRun": .init(type: .boolean, description: "Validate the patch without writing files. Defaults to false.")
+                            ],
+                            required: ["patch"])
         )
     ]
 
@@ -247,6 +258,22 @@ class CoderEngine: Engine {
             logger.i("🔎 Searching text: \(search)")
 
             dto = ToolResult(cache.matching(search).compactMap { $0.jsonOneLine })
+        case .apply_patch:
+            struct Action: Codable {
+                let patch: String
+                let dryRun: Bool?
+            }
+            let command: Command<Action> = try body.decode()
+            let patch = command.params?.arguments?.patch ?? ""
+            let dryRun = command.params?.arguments?.dryRun ?? false
+
+            do {
+                let result = try UnifiedPatchApplier(rootURL: folder.realUrl).apply(patch, dryRun: dryRun)
+                logger.d("💾🩹 \(result.message)")
+                dto = ToolResult([result.message])
+            } catch {
+                dto = ToolResult(["Patch was not applied: \(error.localizedDescription)"])
+            }
         }
         return dto
     }
