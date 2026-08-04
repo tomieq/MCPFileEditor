@@ -20,11 +20,12 @@ final class ShellEngine: Engine {
 
     let tools: [ToolsList.Schema] = [
         .init(ShellCommand.run,
-              description: "Run a zsh command in the fixed project directory. Use this only as a fallback when no dedicated tool fits. Supports shell syntax such as pipes and redirects. The working directory cannot be supplied by the caller. Optional environment variables apply only to this command.",
+              description: "Run a zsh command in the fixed project directory. Use this only as a fallback when no dedicated tool fits. Supports shell syntax such as pipes and redirects. The working directory cannot be supplied by the caller. Output is capped and the structured response reports truncation. Optional environment variables apply only to this command.",
               inputSchema: .init(properties: [
                   "command": .init(type: .string, description: "Shell command to run from the project directory."),
                   "environment": .init(type: .object, description: "String-to-string environment variables for this command only."),
-                  "timeoutSeconds": .init(type: .integer, description: "Maximum runtime in seconds, from 1 through 900; defaults to 300.")
+                  "timeoutSeconds": .init(type: .integer, description: "Maximum runtime in seconds, from 1 through 900; defaults to 300."),
+                  "maxOutputBytes": .init(type: .integer, description: "Maximum combined stdout/stderr bytes to return, from 1 through 1,048,576; defaults to 65,536.")
               ], required: ["command"]))
     ]
 
@@ -40,10 +41,9 @@ final class ShellEngine: Engine {
                 throw ShellToolError.invalidArgument("Missing tool arguments")
             }
             let result = try run(arguments)
-            let header = "exitStatus: \(result.status)\ntimedOut: \(result.timedOut)"
-            return ToolResult([result.output.isEmpty ? header : "\(header)\n\n\(result.output)"])
+            return response(result)
         } catch {
-            return ToolResult(["Shell command failed: \(error.localizedDescription)"])
+            return failure(error)
         }
     }
 }
@@ -52,10 +52,23 @@ private extension ShellEngine {
     func run(_ arguments: Arguments) throws -> ShellExecutionResult {
         let command = try validatedCommand(arguments.command)
         let timeout = try validatedTimeout(arguments.timeoutSeconds)
+        let maximumOutputBytes = try validatedMaximumOutput(arguments.maxOutputBytes)
         let environment = try buildEnvironment(arguments.environment ?? [:])
 
         let task = Process()
         let outputPipe = Pipe()
+        let collector = OutputCollector(maximumBytes: maximumOutputBytes)
+        let outputFinished = DispatchGroup()
+        outputFinished.enter()
+        outputPipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+                outputFinished.leave()
+            } else {
+                collector.append(data)
+            }
+        }
         task.executableURL = URL(fileURLWithPath: "/bin/zsh")
         task.arguments = ["-c", command]
         task.currentDirectoryURL = projectDirectory.url
@@ -71,14 +84,16 @@ private extension ShellEngine {
         }
         try task.run()
         DispatchQueue.global().asyncAfter(deadline: .now() + .seconds(timeout), execute: timeoutWork)
-        let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
         task.waitUntilExit()
         timeoutWork.cancel()
+        outputFinished.wait()
 
         return ShellExecutionResult(
-            output: String(decoding: data, as: UTF8.self).trimmingCharacters(in: .newlines),
+            output: String(decoding: collector.data, as: UTF8.self).trimmingCharacters(in: .newlines),
             status: task.terminationStatus,
-            timedOut: state.timedOut
+            timedOut: state.timedOut,
+            truncated: collector.truncated,
+            outputBytes: collector.totalBytes
         )
     }
 
@@ -95,6 +110,14 @@ private extension ShellEngine {
             throw ShellToolError.invalidArgument("timeoutSeconds must be between 1 and 900")
         }
         return timeout
+    }
+
+    func validatedMaximumOutput(_ value: Int?) throws -> Int {
+        let maximum = value ?? 64 * 1024
+        guard (1...1_048_576).contains(maximum) else {
+            throw ShellToolError.invalidArgument("maxOutputBytes must be between 1 and 1,048,576")
+        }
+        return maximum
     }
 
     func buildEnvironment(_ requested: [String: String]) throws -> [String: String] {
@@ -121,12 +144,96 @@ private struct Arguments: Decodable {
     let command: String
     let environment: [String: String]?
     let timeoutSeconds: Int?
+    let maxOutputBytes: Int?
 }
 
-private struct ShellExecutionResult {
+private struct ShellExecutionResult: Encodable {
     let output: String
     let status: Int32
     let timedOut: Bool
+    let truncated: Bool
+    let outputBytes: Int
+}
+
+private struct ShellResponse: Encodable {
+    let ok: Bool
+    let exitStatus: Int32
+    let timedOut: Bool
+    let truncated: Bool
+    let outputBytes: Int
+    let output: String
+}
+
+private struct ShellFailure: Encodable {
+    let ok = false
+    let errorCode: String
+    let error: String
+}
+
+private final class OutputCollector: @unchecked Sendable {
+    private let lock = NSLock()
+    private let maximumBytes: Int
+    private var storedData = Data()
+    private var capturedBytes = 0
+    private var wasTruncated = false
+
+    init(maximumBytes: Int) {
+        self.maximumBytes = maximumBytes
+    }
+
+    func append(_ data: Data) {
+        lock.lock()
+        defer { lock.unlock() }
+        capturedBytes += data.count
+        let remaining = maximumBytes - storedData.count
+        if remaining > 0 {
+            storedData.append(data.prefix(remaining))
+        }
+        if data.count > remaining {
+            wasTruncated = true
+        }
+    }
+
+    var data: Data {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedData
+    }
+
+    var totalBytes: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return capturedBytes
+    }
+
+    var truncated: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return wasTruncated
+    }
+}
+
+private extension ShellEngine {
+    func response(_ result: ShellExecutionResult) -> ToolResult {
+        let payload = ShellResponse(ok: true,
+                                    exitStatus: result.status,
+                                    timedOut: result.timedOut,
+                                    truncated: result.truncated,
+                                    outputBytes: result.outputBytes,
+                                    output: result.output)
+        return encoded(payload)
+    }
+
+    func failure(_ error: Error) -> ToolResult {
+        encoded(ShellFailure(errorCode: "shell_failed", error: error.localizedDescription))
+    }
+
+    func encoded<T: Encodable>(_ value: T) -> ToolResult {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let fallback = "{\"ok\":false,\"errorCode\":\"serialization_failed\",\"error\":\"Could not serialize shell response\"}"
+        return ToolResult([(try? String(data: encoder.encode(value), encoding: .utf8)) ?? fallback])
+    }
 }
 
 private final class TimeoutState: @unchecked Sendable {

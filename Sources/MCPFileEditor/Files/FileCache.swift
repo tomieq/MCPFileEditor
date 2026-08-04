@@ -12,6 +12,33 @@ struct SearchResult: Codable {
     let filepath: String
     let line: Int
     let lineContent: String
+    let contextBefore: [String]
+    let contextAfter: [String]
+}
+
+struct SearchOptions {
+    let query: String
+    let useRegex: Bool
+    let caseSensitive: Bool
+    let includeGlobs: [String]
+    let excludeGlobs: [String]
+    let limit: Int
+    let contextLines: Int
+}
+
+struct SearchMatches {
+    let results: [SearchResult]
+    let truncated: Bool
+}
+
+enum SearchError: LocalizedError {
+    case invalidQuery(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidQuery(let message): return message
+        }
+    }
 }
 
 class FileCache {
@@ -26,19 +53,48 @@ class FileCache {
         }
     }
 
-    func matching(_ text: String) -> [SearchResult] {
+    func matching(_ options: SearchOptions) throws -> SearchMatches {
+        guard options.query.isEmpty.not, options.query.count <= 4_096 else {
+            throw SearchError.invalidQuery("search must contain 1 through 4,096 characters")
+        }
+        guard (1...1_000).contains(options.limit) else {
+            throw SearchError.invalidQuery("limit must be between 1 and 1,000")
+        }
+        guard (0...20).contains(options.contextLines) else {
+            throw SearchError.invalidQuery("contextLines must be between 0 and 20")
+        }
+
+        let expression: NSRegularExpression?
+        if options.useRegex {
+            do {
+                expression = try NSRegularExpression(
+                    pattern: options.query,
+                    options: options.caseSensitive ? [] : [.caseInsensitive]
+                )
+            } catch {
+                throw SearchError.invalidQuery("Invalid regular expression: \(error.localizedDescription)")
+            }
+        } else {
+            expression = nil
+        }
+
         var results: [SearchResult] = []
-        for (virtualPath, content) in cache where content.contains(text) {
-            let lines = content.split("\n")
+        for (virtualPath, content) in cache.sorted(by: { $0.key < $1.key }) where matchesPath(virtualPath, options: options) {
+            let lines = content.components(separatedBy: "\n")
             for (number, line) in lines.enumerated() {
-                if line.contains(text) {
+                if lineMatches(line, options: options, expression: expression) {
                     results.append(SearchResult(filepath: virtualPath,
                                                 line: number.incremented,
-                                                lineContent: line))
+                                                lineContent: line,
+                                                contextBefore: Array(lines[max(0, number - options.contextLines)..<number]),
+                                                contextAfter: Array(lines[(number + 1)..<min(lines.count, number + options.contextLines + 1)])))
+                    if results.count > options.limit {
+                        return SearchMatches(results: Array(results.dropLast()), truncated: true)
+                    }
                 }
             }
         }
-        return results
+        return SearchMatches(results: results, truncated: false)
     }
 
     func replacementTargets(_ text: String) -> [TextReplacementTarget] {
@@ -71,5 +127,29 @@ class FileCache {
             logger.d("🔁 Unloaded content from \(virtualPath)")
             self.cache[virtualPath] = nil
         }
+    }
+
+    private func lineMatches(_ line: String, options: SearchOptions, expression: NSRegularExpression?) -> Bool {
+        if let expression {
+            let range = NSRange(line.startIndex..., in: line)
+            return expression.firstMatch(in: line, range: range) != nil
+        }
+        if options.caseSensitive {
+            return line.contains(options.query)
+        }
+        return line.range(of: options.query, options: .caseInsensitive) != nil
+    }
+
+    private func matchesPath(_ path: String, options: SearchOptions) -> Bool {
+        let isIncluded = options.includeGlobs.isEmpty || options.includeGlobs.contains { globMatches(path, glob: $0) }
+        return isIncluded && options.excludeGlobs.contains { globMatches(path, glob: $0) }.not
+    }
+
+    private func globMatches(_ path: String, glob: String) -> Bool {
+        let escaped = NSRegularExpression.escapedPattern(for: glob)
+            .replacingOccurrences(of: "\\*\\*", with: ".*")
+            .replacingOccurrences(of: "\\*", with: "[^/]*")
+            .replacingOccurrences(of: "\\?", with: "[^/]")
+        return path.range(of: "^\(escaped)$", options: .regularExpression) != nil
     }
 }

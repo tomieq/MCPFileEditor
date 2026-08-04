@@ -14,6 +14,7 @@ enum CoderCommand: String {
     case list_paths
     case find_file
     case read_file
+    case file_stat
     case rename_file
     case override_file
     case create_new_file
@@ -40,7 +41,7 @@ class CoderEngine: Engine {
         self.cache = cache
     }
 
-    let instructions = "This tool can list and search all files in the project, read and write their content, and more."
+    let instructions = "Manage files beneath the configured project root. Use project-relative paths. Tool results are structured JSON with ok/data or ok/errorCode/error. Prefer bounded read_file calls and use apply_patch or guarded replacements for edits."
 
     func command(for rawValue: String) -> CoderCommand? {
         CoderCommand(rawValue: rawValue)
@@ -75,11 +76,24 @@ class CoderEngine: Engine {
                             required: ["filename"])
         ),
         .init(CoderCommand.read_file,
-              description: "Read the complete UTF-8 contents of one project-relative file.",
+              description: "Read a bounded line range from one UTF-8 project-relative file. Defaults to 200 lines and 65,536 UTF-8 bytes; the structured response reports truncation and nextStartLine.",
               inputSchema:
               ToolParameter(type: .object,
                             properties: [
-                                "filepath": .init(type: .string, description: "Project-relative path of the file to read.")
+                                "filepath": .init(type: .string, description: "Project-relative path of the file to read."),
+                                "startLine": .init(type: .integer, description: "First line to return, starting at 1. Defaults to 1."),
+                                "endLine": .init(type: .integer, description: "Last line to return, inclusive. Defaults to startLine plus 199."),
+                                "maxBytes": .init(type: .integer, description: "Maximum UTF-8 bytes of content, from 1 through 1,048,576. Defaults to 65,536.")
+                            ],
+                            required: ["filepath"])
+        ),
+        .init(CoderCommand.file_stat,
+              description: "Read metadata for one project-relative path, including existence, type, byte size, dates, UTF-8/binary status, and optionally a SHA-256 hash.",
+              inputSchema:
+              ToolParameter(type: .object,
+                            properties: [
+                                "filepath": .init(type: .string, description: "Project-relative path to inspect."),
+                                "includeHash": .init(type: .boolean, description: "Include a SHA-256 hash for regular files. Defaults to false.")
                             ],
                             required: ["filepath"])
         ),
@@ -123,11 +137,17 @@ class CoderEngine: Engine {
                             required: ["filepath"])
         ),
         .init(CoderCommand.search_text,
-              description: "Search project files for exact text matches; no regex, glob, or case-insensitive matching.",
+              description: "Search project files line-by-line using literal text or a regular expression. Supports case sensitivity, include/exclude path globs, a result limit, and surrounding context lines. Returns structured results.",
               inputSchema:
               ToolParameter(type: .object,
                             properties: [
-                                "search": .init(type: .string, description: "Text to search for.")
+                                "search": .init(type: .string, description: "Literal text or regular-expression pattern to search for."),
+                                "useRegex": .init(type: .boolean, description: "Interpret search as a regular expression. Defaults to false."),
+                                "caseSensitive": .init(type: .boolean, description: "Use case-sensitive matching. Defaults to true."),
+                                "includeGlobs": .init(type: .array, items: .init(type: .string), description: "Optional path globs to include. Supports *, **, and ?."),
+                                "excludeGlobs": .init(type: .array, items: .init(type: .string), description: "Optional path globs to exclude. Supports *, **, and ?."),
+                                "limit": .init(type: .integer, description: "Maximum results, from 1 through 1,000. Defaults to 100."),
+                                "contextLines": .init(type: .integer, description: "Context lines before and after each match, from 0 through 20. Defaults to 0.")
                             ],
                             required: ["search"])
         ),
@@ -177,12 +197,10 @@ class CoderEngine: Engine {
         switch command {
         case .file_tree:
             logger.d("🗄️ Tree of project's files")
-
-            dto = ToolResult([folder.tree()])
+            dto = toolSuccess(FileTreeResult(tree: folder.tree()))
         case .list_paths:
             logger.d("🗄️ List project's files")
-
-            dto = ToolResult(folder.files())
+            dto = toolSuccess(FilePathsResult(paths: folder.files()))
         case .find_file:
             struct File: Codable {
                 let filename: String
@@ -191,10 +209,13 @@ class CoderEngine: Engine {
             let filename = command.params?.arguments?.filename ?? ""
 
             logger.d("🔎 Find file \(filename)")
-            dto = ToolResult(folder.files().filter{ $0.contains(filename) })
+            dto = toolSuccess(FilePathsResult(paths: folder.files().filter { $0.contains(filename) }))
         case .read_file:
             struct File: Codable {
                 let filepath: String
+                let startLine: Int?
+                let endLine: Int?
+                let maxBytes: Int?
             }
             let command: Command<File> = try body.decode()
             let virtualPath = command.params?.arguments?.filepath ?? ""
@@ -202,10 +223,31 @@ class CoderEngine: Engine {
             logger.d("👀 Read file content: \(virtualPath)")
             do {
                 let filepath = try folder.projectURL(for: virtualPath)
-                let content = try String(contentsOf: filepath, encoding: .utf8)
-                dto = ToolResult([content])
+                let arguments = command.params?.arguments
+                let result = try FileReader().read(url: filepath,
+                                                   filepath: virtualPath,
+                                                   startLine: arguments?.startLine,
+                                                   endLine: arguments?.endLine,
+                                                   maxBytes: arguments?.maxBytes)
+                dto = toolSuccess(result)
             } catch {
-                dto = ToolResult(["Could not read \(virtualPath): \(error.localizedDescription)"])
+                dto = toolFailure(error, code: "read_failed")
+            }
+        case .file_stat:
+            struct Action: Codable {
+                let filepath: String
+                let includeHash: Bool?
+            }
+            let command: Command<Action> = try body.decode()
+            let arguments = command.params?.arguments
+            let virtualPath = arguments?.filepath ?? ""
+            do {
+                let filepath = try folder.projectURL(for: virtualPath)
+                dto = toolSuccess(try FileInspector().inspect(url: filepath,
+                                                              filepath: virtualPath,
+                                                              includeHash: arguments?.includeHash ?? false))
+            } catch {
+                dto = toolFailure(error, code: "stat_failed")
             }
         case .rename_file:
             struct Action: Codable {
@@ -220,19 +262,19 @@ class CoderEngine: Engine {
                 let filepath = try folder.projectURL(for: virtualPath)
                 let newFilepath = try folder.projectURL(for: newVirtualpath)
                 guard FileManager.default.fileExists(atPath: filepath.path) else {
-                    dto = ToolResult(["File not found at \(virtualPath)"])
+                    dto = toolFailure("File not found at \(virtualPath)", code: "not_found")
                     break
                 }
                 guard FileManager.default.fileExists(atPath: newFilepath.path).not else {
-                    dto = ToolResult(["File already exists at \(newVirtualpath)"])
+                    dto = toolFailure("File already exists at \(newVirtualpath)", code: "already_exists")
                     break
                 }
                 try FileManager.default.createDirectory(at: newFilepath.deletingLastPathComponent(), withIntermediateDirectories: true)
                 try FileManager.default.moveItem(at: filepath, to: newFilepath)
                 logger.d("💾⚙️ Rename filename from \(virtualPath) ➡️ \(newVirtualpath)")
-                dto = ToolResult(["File has been moved from \(virtualPath) to \(newVirtualpath)"])
+                dto = toolSuccess(FileMoveResult(oldFilepath: virtualPath, newFilepath: newVirtualpath))
             } catch {
-                dto = ToolResult(["Could not move \(virtualPath) to \(newVirtualpath): \(error.localizedDescription)"])
+                dto = toolFailure(error, code: "move_failed")
             }
         case .override_file:
             struct Action: Codable {
@@ -246,14 +288,14 @@ class CoderEngine: Engine {
             do {
                 let filepath = try folder.projectURL(for: virtualPath)
                 guard FileManager.default.fileExists(atPath: filepath.path) else {
-                    dto = ToolResult(["File not found at \(virtualPath)"])
+                    dto = toolFailure("File not found at \(virtualPath)", code: "not_found")
                     break
                 }
                 try content.write(to: filepath, atomically: true, encoding: .utf8)
                 logger.d("💾🟠 Override file \(virtualPath)")
-                dto = ToolResult(["The content has been written to \(virtualPath)"])
+                dto = toolSuccess(FileWriteResult(filepath: virtualPath, changed: true))
             } catch {
-                dto = ToolResult(["Could not write \(virtualPath): \(error.localizedDescription)"])
+                dto = toolFailure(error, code: "write_failed")
             }
         case .create_new_file:
             struct Action: Codable {
@@ -267,15 +309,15 @@ class CoderEngine: Engine {
             do {
                 let filepath = try folder.projectURL(for: virtualPath)
                 guard FileManager.default.fileExists(atPath: filepath.path).not else {
-                    dto = ToolResult(["File already exists at \(virtualPath)"])
+                    dto = toolFailure("File already exists at \(virtualPath)", code: "already_exists")
                     break
                 }
                 try FileManager.default.createDirectory(at: filepath.deletingLastPathComponent(), withIntermediateDirectories: true)
                 try content.write(to: filepath, atomically: true, encoding: .utf8)
                 logger.d("💾🟢 Create file \(virtualPath)")
-                dto = ToolResult(["File has been created at \(virtualPath)"])
+                dto = toolSuccess(FileWriteResult(filepath: virtualPath, changed: true))
             } catch {
-                dto = ToolResult(["Could not create \(virtualPath): \(error.localizedDescription)"])
+                dto = toolFailure(error, code: "create_failed")
             }
         case .delete_file:
             struct Action: Codable {
@@ -286,24 +328,44 @@ class CoderEngine: Engine {
             do {
                 let filepath = try folder.projectURL(for: virtualPath)
                 guard FileManager.default.fileExists(atPath: filepath.path) else {
-                    dto = ToolResult(["File not found at \(virtualPath)"])
+                    dto = toolFailure("File not found at \(virtualPath)", code: "not_found")
                     break
                 }
                 try FileManager.default.removeItem(at: filepath)
                 logger.d("💾🔴 Delete file \(virtualPath)")
-                dto = ToolResult(["File \(virtualPath) has been deleted"])
+                dto = toolSuccess(FileDeleteResult(filepath: virtualPath, deleted: true))
             } catch {
-                dto = ToolResult(["Could not delete \(virtualPath): \(error.localizedDescription)"])
+                dto = toolFailure(error, code: "delete_failed")
             }
         case .search_text:
             struct Action: Codable {
                 let search: String
+                let useRegex: Bool?
+                let caseSensitive: Bool?
+                let includeGlobs: [String]?
+                let excludeGlobs: [String]?
+                let limit: Int?
+                let contextLines: Int?
             }
             let command: Command<Action> = try body.decode()
-            let search = command.params?.arguments?.search ?? ""
+            let arguments = command.params?.arguments
+            let search = arguments?.search ?? ""
             logger.i("🔎 Searching text: \(search)")
-
-            dto = ToolResult(cache.matching(search).compactMap { $0.jsonOneLine })
+            do {
+                let options = SearchOptions(query: search,
+                                            useRegex: arguments?.useRegex ?? false,
+                                            caseSensitive: arguments?.caseSensitive ?? true,
+                                            includeGlobs: arguments?.includeGlobs ?? [],
+                                            excludeGlobs: arguments?.excludeGlobs ?? [],
+                                            limit: arguments?.limit ?? 100,
+                                            contextLines: arguments?.contextLines ?? 0)
+                let matches = try cache.matching(options)
+                dto = toolSuccess(SearchTextResult(results: matches.results,
+                                                   limit: options.limit,
+                                                   truncated: matches.truncated))
+            } catch {
+                dto = toolFailure(error, code: "search_failed")
+            }
         case .apply_patch:
             struct Action: Codable {
                 let patch: String
@@ -316,9 +378,13 @@ class CoderEngine: Engine {
             do {
                 let result = try UnifiedPatchApplier(rootURL: folder.realUrl).apply(patch, dryRun: dryRun)
                 logger.d("💾🩹 \(result.message)")
-                dto = ToolResult([dryRun ? result.structuredMessage : result.message])
+                dto = toolSuccess(PatchToolResult(filesChanged: result.filesChanged,
+                                                  changed: !dryRun,
+                                                  dryRun: result.dryRun,
+                                                  paths: result.paths,
+                                                  report: result.report))
             } catch {
-                dto = ToolResult(["Patch was not applied: \(error.localizedDescription)"])
+                dto = toolFailure(error, code: "patch_failed")
             }
         case .replace_text:
             struct Action: Codable {
@@ -342,9 +408,9 @@ class CoderEngine: Engine {
                     dryRun: arguments?.dryRun ?? false
                 )
                 logger.d("💾🔁 \(result.message)")
-                dto = ToolResult([result.dryRun ? result.structuredMessage : result.message])
+                dto = toolSuccess(result)
             } catch {
-                dto = ToolResult(["Text was not replaced: \(error.localizedDescription)"])
+                dto = toolFailure(error, code: "replace_failed")
             }
         case .replace_all:
             struct Action: Codable {
@@ -367,9 +433,9 @@ class CoderEngine: Engine {
                     dryRun: dryRun
                 )
                 logger.d("💾🔁 \(result.message)")
-                dto = ToolResult([dryRun ? result.structuredMessage : result.message])
+                dto = toolSuccess(result)
             } catch {
-                dto = ToolResult(["Text was not replaced: \(error.localizedDescription)"])
+                dto = toolFailure(error, code: "replace_failed")
             }
         }
         return dto

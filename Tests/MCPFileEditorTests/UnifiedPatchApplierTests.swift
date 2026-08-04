@@ -225,4 +225,58 @@ final class UnifiedPatchApplierTests: XCTestCase {
 
         XCTAssertThrowsError(try folder.projectURL(for: "external/outside.txt"))
     }
+
+    func testFileReaderBoundsLinesAndBytes() throws {
+        let file = directory.appendingPathComponent("example.txt")
+        try "one\ntwo\nthree\nfour\n".write(to: file, atomically: true, encoding: .utf8)
+
+        let result = try FileReader().read(url: file,
+                                           filepath: "example.txt",
+                                           startLine: 2,
+                                           endLine: 4,
+                                           maxBytes: 7)
+
+        XCTAssertEqual(result.content, "two\nthr")
+        XCTAssertEqual(result.startLine, 2)
+        XCTAssertEqual(result.endLine, 4)
+        XCTAssertEqual(result.totalLines, 4)
+        XCTAssertTrue(result.truncated)
+        XCTAssertEqual(result.nextStartLine, 2)
+    }
+
+    func testFileInspectorReportsMetadataAndHash() throws {
+        let file = directory.appendingPathComponent("example.txt")
+        try "hello\n".write(to: file, atomically: true, encoding: .utf8)
+
+        let metadata = try FileInspector().inspect(url: file, filepath: "example.txt", includeHash: true)
+
+        XCTAssertTrue(metadata.exists)
+        XCTAssertEqual(metadata.type, "file")
+        XCTAssertEqual(metadata.byteSize, 6)
+        XCTAssertEqual(metadata.encoding, "utf-8")
+        XCTAssertEqual(metadata.isBinary, false)
+        XCTAssertEqual(metadata.sha256, "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03")
+    }
+
+    func testSearchSupportsCaseGlobsAndContext() throws {
+        try "first\nNeedle value\nthird\n".write(to: directory.appendingPathComponent("include.txt"), atomically: true, encoding: .utf8)
+        try "needle ignored\n".write(to: directory.appendingPathComponent("exclude.txt"), atomically: true, encoding: .utf8)
+        let folder = Folder(config: .init(projectPath: directory.path, fileExtensions: "txt"))
+        let cache = FileCache(folder: folder)
+        let options = SearchOptions(query: "needle",
+                                    useRegex: false,
+                                    caseSensitive: false,
+                                    includeGlobs: ["include.*"],
+                                    excludeGlobs: [],
+                                    limit: 10,
+                                    contextLines: 1)
+
+        let results = try cache.matching(options).results
+
+        XCTAssertEqual(results.count, 1)
+        XCTAssertEqual(results[0].filepath, "include.txt")
+        XCTAssertEqual(results[0].line, 2)
+        XCTAssertEqual(results[0].contextBefore, ["first"])
+        XCTAssertEqual(results[0].contextAfter, ["third"])
+    }
 }
