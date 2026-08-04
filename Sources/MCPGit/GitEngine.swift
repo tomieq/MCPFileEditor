@@ -41,20 +41,20 @@ final class GitEngine: Engine {
         .init(GitCommand.repositoryInfo, description: "Get repository root, HEAD, branch state, and shallow-clone status.", inputSchema: emptySchema),
         .init(GitCommand.status, description: "Get Git status, branch tracking, and optionally ignored files.", inputSchema: .init(properties: [
             "includeIgnored": property(.boolean, "Include ignored files."),
-            "pathspecs": property(.array, "Optional project-relative paths to limit the status.")
+            "pathspecs": property(.array, itemsType: .string, "Optional project-relative paths to limit the status.")
         ], required: [])),
         .init(GitCommand.diff, description: "Read a working-tree, staged, or two-revision diff. No changes are made.", inputSchema: .init(properties: [
             "mode": property(.string, "working, staged, or refs.", values: ["working", "staged", "refs"]),
             "baseRef": property(.string, "Base revision; required when mode is refs."),
             "targetRef": property(.string, "Target revision; required when mode is refs."),
-            "pathspecs": property(.array, "Optional project-relative paths."),
+            "pathspecs": property(.array, itemsType: .string, "Optional project-relative paths."),
             "contextLines": property(.integer, "Patch context lines, from 0 through 100."),
             "statOnly": property(.boolean, "Return diff statistics instead of a patch."),
             "nameOnly": property(.boolean, "Return changed paths only.")
         ], required: [])),
         .init(GitCommand.log, description: "Read commit history without changing repository state.", inputSchema: .init(properties: [
             "ref": property(.string, "Revision to start from; defaults to HEAD."),
-            "pathspecs": property(.array, "Optional project-relative paths."),
+            "pathspecs": property(.array, itemsType: .string, "Optional project-relative paths."),
             "limit": property(.integer, "Maximum commits, from 1 through 500."),
             "skip": property(.integer, "Number of commits to skip, from 0 through 10,000."),
             "author": property(.string, "Author pattern."),
@@ -65,7 +65,7 @@ final class GitEngine: Engine {
         ], required: [])),
         .init(GitCommand.show, description: "Read one commit's metadata, files, and optional patch.", inputSchema: .init(properties: [
             "revision": property(.string, "Commit or other resolvable revision."),
-            "pathspecs": property(.array, "Optional project-relative paths."),
+            "pathspecs": property(.array, itemsType: .string, "Optional project-relative paths."),
             "includePatch": property(.boolean, "Include the patch."),
             "statOnly": property(.boolean, "Return only diff statistics.")
         ], required: ["revision"])),
@@ -78,7 +78,7 @@ final class GitEngine: Engine {
         ], required: ["path"])),
         .init(GitCommand.listFiles, description: "List tracked, untracked, ignored, or all project files.", inputSchema: .init(properties: [
             "scope": property(.string, "tracked, untracked, ignored, or all.", values: ["tracked", "untracked", "ignored", "all"]),
-            "pathspecs": property(.array, "Optional project-relative paths.")
+            "pathspecs": property(.array, itemsType: .string, "Optional project-relative paths.")
         ], required: [])),
         .init(GitCommand.listBranches, description: "List local and/or remote branches with upstream metadata.", inputSchema: .init(properties: [
             "scope": property(.string, "local, remote, or all.", values: ["local", "remote", "all"]),
@@ -94,7 +94,7 @@ final class GitEngine: Engine {
             "limit": property(.integer, "Maximum tags, from 1 through 500.")
         ], required: [])),
         .init(GitCommand.resolveRevisions, description: "Resolve revisions to immutable object IDs.", inputSchema: .init(properties: [
-            "revisions": property(.array, "One or more revisions to resolve."),
+            "revisions": property(.array, itemsType: .string, "One or more revisions to resolve."),
             "verifyCommit": property(.boolean, "Require each revision to resolve to a commit.")
         ], required: ["revisions"])),
         .init(GitCommand.mergeBase, description: "Find the common ancestor of two revisions.", inputSchema: .init(properties: [
@@ -105,7 +105,7 @@ final class GitEngine: Engine {
         .init(GitCommand.compare, description: "Compare two revisions and optionally include the diff.", inputSchema: .init(properties: [
             "baseRef": property(.string, "Base revision."),
             "targetRef": property(.string, "Target revision."),
-            "pathspecs": property(.array, "Optional project-relative paths."),
+            "pathspecs": property(.array, itemsType: .string, "Optional project-relative paths."),
             "includePatch": property(.boolean, "Include the patch."),
             "statOnly": property(.boolean, "Return diff statistics only."),
             "nameOnly": property(.boolean, "Return changed paths only."),
@@ -113,7 +113,7 @@ final class GitEngine: Engine {
         ], required: ["baseRef", "targetRef"])),
         /* disabled
         .init(GitCommand.conflicts, description: "List files with unresolved Git conflicts.", inputSchema: .init(properties: [
-            "pathspecs": property(.array, "Optional project-relative paths.")
+            "pathspecs": property(.array, itemsType: .string, "Optional project-relative paths.")
         ], required: [])),
         .init(GitCommand.stashes, description: "List stashes without applying or modifying them.", inputSchema: .init(properties: [
             "limit": property(.integer, "Maximum stashes, from 1 through 500."),
@@ -123,7 +123,7 @@ final class GitEngine: Engine {
             "recursive": property(.boolean, "Include nested submodules.")
         ], required: [])),
         .init(GitCommand.configGet, description: "Read explicitly allowlisted local Git configuration keys.", inputSchema: .init(properties: [
-            "keys": property(.array, "Allowed keys: remote.<name>.url, branch.<name>.remote, branch.<name>.merge, core.repositoryformatversion.")
+            "keys": property(.array, itemsType: .string, "Allowed keys: remote.<name>.url, branch.<name>.remote, branch.<name>.merge, core.repositoryformatversion.")
         ], required: ["keys"]))
          */
     ]
@@ -159,8 +159,8 @@ final class GitEngine: Engine {
 private extension GitEngine {
     static let emptySchema = ToolParameter(type: .object, properties: [:], required: [])
 
-    static func property(_ type: ValueType, _ description: String, values: [String]? = nil) -> ToolParameter.Property {
-        .init(type: type, description: description, enumValues: values)
+    static func property(_ type: ValueType, itemsType: ValueType? = nil, _ description: String, values: [String]? = nil) -> ToolParameter.Property {
+        .init(type: type, items: itemsType.isNil ? nil : .init(type: itemsType!), description: description, enumValues: values)
     }
 
     func result(_ command: ShellResult) throws -> ToolResult {
