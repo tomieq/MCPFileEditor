@@ -60,8 +60,11 @@ class FileCache {
     }
 
     private func load(virtualPath: String) {
-        let path = folder.realPath(virtualPath)
-        if folder.isAllowedFile(URL(fileURLWithPath: path)), let content = try? String(contentsOfFile: path) {
+        guard let url = try? folder.projectURL(for: virtualPath) else {
+            cache[virtualPath] = nil
+            return
+        }
+        if folder.isAllowedFile(url), let content = try? String(contentsOf: url, encoding: .utf8) {
             self.cache[virtualPath] = content
             logger.d("🔁 Loaded content from \(virtualPath)")
         } else {

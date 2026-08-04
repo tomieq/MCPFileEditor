@@ -18,7 +18,7 @@ enum CoderCommand: String {
     case override_file
     case create_new_file
     case delete_file
-    case file_glob_search
+    case search_text
     case apply_patch
     case replace_text
     case replace_all
@@ -75,7 +75,7 @@ class CoderEngine: Engine {
                             required: ["filename"])
         ),
         .init(CoderCommand.read_file,
-              description: "Read the contents of a file.",
+              description: "Read the complete UTF-8 contents of one project-relative file.",
               inputSchema:
               ToolParameter(type: .object,
                             properties: [
@@ -84,7 +84,7 @@ class CoderEngine: Engine {
                             required: ["filepath"])
         ),
         .init(CoderCommand.rename_file,
-              description: "Rename or move a project file.",
+              description: "Rename or move one project-relative file. Creates missing destination directories.",
               inputSchema:
               ToolParameter(type: .object,
                             properties: [
@@ -94,7 +94,7 @@ class CoderEngine: Engine {
                             required: ["oldFilepath", "newFilepath"])
         ),
         .init(CoderCommand.override_file,
-              description: "Replace the entire contents of an existing file.",
+              description: "Replace the entire UTF-8 contents of an existing project-relative file.",
               inputSchema:
               ToolParameter(type: .object,
                             properties: [
@@ -104,7 +104,7 @@ class CoderEngine: Engine {
                             required: ["filepath", "content"])
         ),
         .init(CoderCommand.create_new_file,
-              description: "Create a new file. Fails if the file already exists.",
+              description: "Create a UTF-8 project-relative file and any missing parent directories. Fails if the file already exists.",
               inputSchema:
               ToolParameter(type: .object,
                             properties: [
@@ -122,8 +122,8 @@ class CoderEngine: Engine {
                             ],
                             required: ["filepath"])
         ),
-        .init(CoderCommand.file_glob_search,
-              description: "Search all project files for exact text matches; no regex.",
+        .init(CoderCommand.search_text,
+              description: "Search project files for exact text matches; no regex, glob, or case-insensitive matching.",
               inputSchema:
               ToolParameter(type: .object,
                             properties: [
@@ -198,11 +198,15 @@ class CoderEngine: Engine {
             }
             let command: Command<File> = try body.decode()
             let virtualPath = command.params?.arguments?.filepath ?? ""
-            let filepath = folder.realPath(virtualPath)
 
             logger.d("👀 Read file content: \(virtualPath)")
-            let content = try? String(contentsOfFile: filepath, encoding: .utf8)
-            dto = ToolResult([content.or("File not found at \(virtualPath)")])
+            do {
+                let filepath = try folder.projectURL(for: virtualPath)
+                let content = try String(contentsOf: filepath, encoding: .utf8)
+                dto = ToolResult([content])
+            } catch {
+                dto = ToolResult(["Could not read \(virtualPath): \(error.localizedDescription)"])
+            }
         case .rename_file:
             struct Action: Codable {
                 let oldFilepath: String
@@ -212,20 +216,24 @@ class CoderEngine: Engine {
             let virtualPath = command.params?.arguments?.oldFilepath ?? ""
             let newVirtualpath = command.params?.arguments?.newFilepath ?? ""
 
-            let filepath = folder.realPath(virtualPath)
-            let newFilepath = folder.realPath(newVirtualpath)
-
-            guard FileManager.default.fileExists(atPath: filepath) else {
-                dto = ToolResult(["File not found at \(virtualPath)"])
-                break
+            do {
+                let filepath = try folder.projectURL(for: virtualPath)
+                let newFilepath = try folder.projectURL(for: newVirtualpath)
+                guard FileManager.default.fileExists(atPath: filepath.path) else {
+                    dto = ToolResult(["File not found at \(virtualPath)"])
+                    break
+                }
+                guard FileManager.default.fileExists(atPath: newFilepath.path).not else {
+                    dto = ToolResult(["File already exists at \(newVirtualpath)"])
+                    break
+                }
+                try FileManager.default.createDirectory(at: newFilepath.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try FileManager.default.moveItem(at: filepath, to: newFilepath)
+                logger.d("💾⚙️ Rename filename from \(virtualPath) ➡️ \(newVirtualpath)")
+                dto = ToolResult(["File has been moved from \(virtualPath) to \(newVirtualpath)"])
+            } catch {
+                dto = ToolResult(["Could not move \(virtualPath) to \(newVirtualpath): \(error.localizedDescription)"])
             }
-            guard FileManager.default.fileExists(atPath: newFilepath).not else {
-                dto = ToolResult(["File already exists at \(virtualPath)"])
-                break
-            }
-            try? FileManager.default.moveItem(atPath: filepath, toPath: newFilepath)
-            logger.d("💾⚙️ Rename filename from \(virtualPath) ➡️ \(newVirtualpath)")
-            dto = ToolResult(["File has been moved from \(virtualPath) to \(newVirtualpath)"])
         case .override_file:
             struct Action: Codable {
                 let filepath: String
@@ -235,15 +243,18 @@ class CoderEngine: Engine {
             let virtualPath = command.params?.arguments?.filepath ?? ""
             let content = command.params?.arguments?.content ?? ""
 
-            let filepath = folder.realPath(virtualPath)
-
-            guard FileManager.default.fileExists(atPath: filepath) else {
-                dto = ToolResult(["File not found at \(virtualPath)"])
-                break
+            do {
+                let filepath = try folder.projectURL(for: virtualPath)
+                guard FileManager.default.fileExists(atPath: filepath.path) else {
+                    dto = ToolResult(["File not found at \(virtualPath)"])
+                    break
+                }
+                try content.write(to: filepath, atomically: true, encoding: .utf8)
+                logger.d("💾🟠 Override file \(virtualPath)")
+                dto = ToolResult(["The content has been written to \(virtualPath)"])
+            } catch {
+                dto = ToolResult(["Could not write \(virtualPath): \(error.localizedDescription)"])
             }
-            try? content.write(toFile: filepath, atomically: true, encoding: .utf8)
-            logger.d("💾🟠 Override file \(virtualPath)")
-            dto = ToolResult(["The content has been written to \(virtualPath)"])
         case .create_new_file:
             struct Action: Codable {
                 let filepath: String
@@ -253,31 +264,38 @@ class CoderEngine: Engine {
             let virtualPath = command.params?.arguments?.filepath ?? ""
             let content = command.params?.arguments?.content ?? ""
 
-            let filepath = folder.realPath(virtualPath)
-
-            guard FileManager.default.fileExists(atPath: filepath).not else {
-                dto = ToolResult(["File already exists at \(virtualPath)"])
-                break
+            do {
+                let filepath = try folder.projectURL(for: virtualPath)
+                guard FileManager.default.fileExists(atPath: filepath.path).not else {
+                    dto = ToolResult(["File already exists at \(virtualPath)"])
+                    break
+                }
+                try FileManager.default.createDirectory(at: filepath.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try content.write(to: filepath, atomically: true, encoding: .utf8)
+                logger.d("💾🟢 Create file \(virtualPath)")
+                dto = ToolResult(["File has been created at \(virtualPath)"])
+            } catch {
+                dto = ToolResult(["Could not create \(virtualPath): \(error.localizedDescription)"])
             }
-            try? content.write(toFile: filepath, atomically: true, encoding: .utf8)
-            logger.d("💾🟢 Create file \(virtualPath)")
-            dto = ToolResult(["File has been created at \(virtualPath)"])
         case .delete_file:
             struct Action: Codable {
                 let filepath: String
             }
             let command: Command<Action> = try body.decode()
             let virtualPath = command.params?.arguments?.filepath ?? ""
-            let filepath = folder.realPath(virtualPath)
-
-            guard FileManager.default.fileExists(atPath: filepath) else {
-                dto = ToolResult(["File \(virtualPath) does not exists"])
-                break
+            do {
+                let filepath = try folder.projectURL(for: virtualPath)
+                guard FileManager.default.fileExists(atPath: filepath.path) else {
+                    dto = ToolResult(["File not found at \(virtualPath)"])
+                    break
+                }
+                try FileManager.default.removeItem(at: filepath)
+                logger.d("💾🔴 Delete file \(virtualPath)")
+                dto = ToolResult(["File \(virtualPath) has been deleted"])
+            } catch {
+                dto = ToolResult(["Could not delete \(virtualPath): \(error.localizedDescription)"])
             }
-            try? FileManager.default.removeItem(atPath: filepath)
-            logger.d("💾🔴 Delete file \(virtualPath)")
-            dto = ToolResult(["File \(virtualPath) has been deleted"])
-        case .file_glob_search:
+        case .search_text:
             struct Action: Codable {
                 let search: String
             }

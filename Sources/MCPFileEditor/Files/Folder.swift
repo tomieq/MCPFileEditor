@@ -10,6 +10,17 @@ import SwiftExtensions
 import Env
 import FileTree
 
+enum FolderError: LocalizedError {
+    case invalidProjectPath(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidProjectPath(let path):
+            return "Path must be a non-empty project-relative path that remains within the configured project: \(path)"
+        }
+    }
+}
+
 class Folder {
     private let logger = Logger(Folder.self)
     let realUrl: URL
@@ -24,6 +35,8 @@ class Folder {
             "venv", "runs", ".git", ".build", ".swiftpm"
         ]
         self.realUrl = URL(fileURLWithPath: projectPath)
+            .resolvingSymlinksInPath()
+            .standardizedFileURL
         self.allowedExtensions = extensions
     }
 
@@ -42,8 +55,25 @@ class Folder {
             .replacingOccurrences(of: realUrl.path().dropLast(), with: ".")
     }
 
-    func realPath(_ virtualPath: String) -> String {
-        realUrl.appendingPathComponent(virtualPath).path()
+    func projectURL(for virtualPath: String) throws -> URL {
+        guard virtualPath.isEmpty.not,
+              virtualPath.hasPrefix("/").not,
+              virtualPath.split(separator: "/").contains("..").not else {
+            throw FolderError.invalidProjectPath(virtualPath)
+        }
+
+        let rootPath = realUrl.path.hasSuffix("/") ? realUrl.path : realUrl.path + "/"
+        var candidate = realUrl
+        for component in virtualPath.split(separator: "/") {
+            candidate = candidate.appendingPathComponent(String(component)).standardizedFileURL
+            if fileManager.fileExists(atPath: candidate.path) {
+                candidate = candidate.resolvingSymlinksInPath().standardizedFileURL
+            }
+            guard candidate.path.hasPrefix(rootPath) else {
+                throw FolderError.invalidProjectPath(virtualPath)
+            }
+        }
+        return candidate
     }
 
     func virtualPath(_ realPath: String) -> String {

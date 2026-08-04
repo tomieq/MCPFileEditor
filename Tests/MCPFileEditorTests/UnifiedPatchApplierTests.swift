@@ -202,4 +202,27 @@ final class UnifiedPatchApplierTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: first), "old value\n")
         XCTAssertEqual(try String(contentsOf: second), "changed externally\n")
     }
+
+    func testProjectPathResolutionRejectsTraversalAndAbsolutePaths() throws {
+        let folder = Folder(config: .init(projectPath: directory.path, fileExtensions: "txt"))
+
+        XCTAssertThrowsError(try folder.projectURL(for: "../outside.txt"))
+        XCTAssertThrowsError(try folder.projectURL(for: "/tmp/outside.txt"))
+        XCTAssertThrowsError(try folder.projectURL(for: "nested/../../outside.txt"))
+    }
+
+    func testProjectPathResolutionRejectsSymlinkEscapes() throws {
+        let folder = Folder(config: .init(projectPath: directory.path, fileExtensions: "txt"))
+        let externalDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: externalDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: externalDirectory) }
+
+        try FileManager.default.createSymbolicLink(
+            at: directory.appendingPathComponent("external"),
+            withDestinationURL: externalDirectory
+        )
+
+        XCTAssertThrowsError(try folder.projectURL(for: "external/outside.txt"))
+    }
 }
