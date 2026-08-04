@@ -32,7 +32,7 @@ func toolSuccess<Value: Encodable>(_ data: Value) -> ToolResult {
     encoder.outputFormatting = [.sortedKeys]
     let value = ToolSuccess(data: data)
     let output = (try? String(data: encoder.encode(value), encoding: .utf8)) ?? "{\"ok\":false,\"errorCode\":\"serialization_failed\",\"error\":\"Could not serialize tool response\"}"
-    return ToolResult([output])
+    return (try? ToolResult(structuredContent: value, text: [output])) ?? ToolResult([output])
 }
 
 func toolFailure(_ error: Error, code: String = "operation_failed") -> ToolResult {
@@ -40,7 +40,7 @@ func toolFailure(_ error: Error, code: String = "operation_failed") -> ToolResul
     encoder.outputFormatting = [.sortedKeys]
     let value = ToolFailure(errorCode: code, error: error.localizedDescription)
     let output = (try? String(data: encoder.encode(value), encoding: .utf8)) ?? "{\"ok\":false,\"errorCode\":\"serialization_failed\",\"error\":\"Could not serialize tool error\"}"
-    return ToolResult([output])
+    return (try? ToolResult(structuredContent: value, text: [output])) ?? ToolResult([output])
 }
 
 func toolFailure(_ message: String, code: String) -> ToolResult {

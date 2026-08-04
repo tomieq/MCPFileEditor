@@ -31,6 +31,15 @@ final class GitEngine: Engine {
         self.repository = repository
     }
 
+    private static let outputSchema = ToolParameter(type: .object,
+                                                    properties: [
+                                                        "ok": .init(type: .boolean, description: "Whether Git inspection succeeded."),
+                                                        "output": .init(type: .string, description: "Git command output."),
+                                                        "errorCode": .init(type: .string, description: "Machine-readable failure code."),
+                                                        "error": .init(type: .string, description: "Human-readable failure message.")
+                                                    ],
+                                                    required: ["ok"])
+
     let instructions = "Read-only Git tools for the configured project root. They cannot modify Git state, files, branches, remotes, or repository configuration."
 
     func canHandle(_ command: String) -> Bool {
@@ -38,11 +47,11 @@ final class GitEngine: Engine {
     }
 
     let tools: [ToolsList.Schema] = [
-        .init(GitCommand.repositoryInfo, description: "Get repository root, HEAD, branch state, and shallow-clone status.", inputSchema: emptySchema),
+        .init(GitCommand.repositoryInfo, description: "Get repository root, HEAD, branch state, and shallow-clone status.", inputSchema: emptySchema, outputSchema: GitEngine.outputSchema),
         .init(GitCommand.status, description: "Get Git status, branch tracking, and optionally ignored files.", inputSchema: .init(properties: [
             "includeIgnored": property(.boolean, "Include ignored files."),
             "pathspecs": property(.array, itemsType: .string, "Optional project-relative paths to limit the status.")
-        ], required: [])),
+        ], required: []), outputSchema: GitEngine.outputSchema),
         .init(GitCommand.diff, description: "Read a working-tree, staged, or two-revision diff. No changes are made.", inputSchema: .init(properties: [
             "mode": property(.string, "working, staged, or refs.", values: ["working", "staged", "refs"]),
             "baseRef": property(.string, "Base revision; required when mode is refs."),
@@ -51,7 +60,7 @@ final class GitEngine: Engine {
             "contextLines": property(.integer, "Patch context lines, from 0 through 100."),
             "statOnly": property(.boolean, "Return diff statistics instead of a patch."),
             "nameOnly": property(.boolean, "Return changed paths only.")
-        ], required: [])),
+        ], required: []), outputSchema: GitEngine.outputSchema),
         .init(GitCommand.log, description: "Read commit history without changing repository state.", inputSchema: .init(properties: [
             "ref": property(.string, "Revision to start from; defaults to HEAD."),
             "pathspecs": property(.array, itemsType: .string, "Optional project-relative paths."),
@@ -62,46 +71,46 @@ final class GitEngine: Engine {
             "until": property(.string, "Git date expression."),
             "firstParent": property(.boolean, "Follow only first-parent history."),
             "includePatch": property(.boolean, "Include patches in the result.")
-        ], required: [])),
+        ], required: []), outputSchema: GitEngine.outputSchema),
         .init(GitCommand.show, description: "Read one commit's metadata, files, and optional patch.", inputSchema: .init(properties: [
             "revision": property(.string, "Commit or other resolvable revision."),
             "pathspecs": property(.array, itemsType: .string, "Optional project-relative paths."),
             "includePatch": property(.boolean, "Include the patch."),
             "statOnly": property(.boolean, "Return only diff statistics.")
-        ], required: ["revision"])),
+        ], required: ["revision"]), outputSchema: GitEngine.outputSchema),
         .init(GitCommand.blame, description: "Read line attribution for one project-relative file.", inputSchema: .init(properties: [
             "path": property(.string, "Project-relative file path."),
             "startLine": property(.integer, "First line, starting at 1."),
             "endLine": property(.integer, "Last line, inclusive."),
             "ref": property(.string, "Revision; defaults to HEAD."),
             "ignoreWhitespace": property(.boolean, "Ignore whitespace changes.")
-        ], required: ["path"])),
+        ], required: ["path"]), outputSchema: GitEngine.outputSchema),
         .init(GitCommand.listFiles, description: "List tracked, untracked, ignored, or all project files.", inputSchema: .init(properties: [
             "scope": property(.string, "tracked, untracked, ignored, or all.", values: ["tracked", "untracked", "ignored", "all"]),
             "pathspecs": property(.array, itemsType: .string, "Optional project-relative paths.")
-        ], required: [])),
+        ], required: []), outputSchema: GitEngine.outputSchema),
         .init(GitCommand.listBranches, description: "List local and/or remote branches with upstream metadata.", inputSchema: .init(properties: [
             "scope": property(.string, "local, remote, or all.", values: ["local", "remote", "all"]),
             "contains": property(.string, "Only branches containing this revision."),
             "mergedInto": property(.string, "Only branches merged into this revision."),
             "noMergedInto": property(.string, "Only branches not merged into this revision.")
-        ], required: [])),
-        //.init(GitCommand.listRemotes, description: "List configured remote names and fetch URLs.", inputSchema: emptySchema),
+        ], required: []), outputSchema: GitEngine.outputSchema),
+        //.init(GitCommand.listRemotes, description: "List configured remote names and fetch URLs.", inputSchema: emptySchema, outputSchema: GitEngine.outputSchema),
         .init(GitCommand.listTags, description: "List tags and target object IDs.", inputSchema: .init(properties: [
             "pattern": property(.string, "Glob pattern for tag names."),
             "contains": property(.string, "Only tags containing this revision."),
             "pointsAt": property(.string, "Only tags pointing at this revision."),
             "limit": property(.integer, "Maximum tags, from 1 through 500.")
-        ], required: [])),
+        ], required: []), outputSchema: GitEngine.outputSchema),
         .init(GitCommand.resolveRevisions, description: "Resolve revisions to immutable object IDs.", inputSchema: .init(properties: [
             "revisions": property(.array, itemsType: .string, "One or more revisions to resolve."),
             "verifyCommit": property(.boolean, "Require each revision to resolve to a commit.")
-        ], required: ["revisions"])),
+        ], required: ["revisions"]), outputSchema: GitEngine.outputSchema),
         .init(GitCommand.mergeBase, description: "Find the common ancestor of two revisions.", inputSchema: .init(properties: [
             "leftRef": property(.string, "First revision."),
             "rightRef": property(.string, "Second revision."),
             "all": property(.boolean, "Return all merge bases.")
-        ], required: ["leftRef", "rightRef"])),
+        ], required: ["leftRef", "rightRef"]), outputSchema: GitEngine.outputSchema),
         .init(GitCommand.compare, description: "Compare two revisions and optionally include the diff.", inputSchema: .init(properties: [
             "baseRef": property(.string, "Base revision."),
             "targetRef": property(.string, "Target revision."),
@@ -110,18 +119,18 @@ final class GitEngine: Engine {
             "statOnly": property(.boolean, "Return diff statistics only."),
             "nameOnly": property(.boolean, "Return changed paths only."),
             "contextLines": property(.integer, "Patch context lines, from 0 through 100.")
-        ], required: ["baseRef", "targetRef"])),
+        ], required: ["baseRef", "targetRef"]), outputSchema: GitEngine.outputSchema),
         /* disabled
         .init(GitCommand.conflicts, description: "List files with unresolved Git conflicts.", inputSchema: .init(properties: [
             "pathspecs": property(.array, itemsType: .string, "Optional project-relative paths.")
-        ], required: [])),
+        ], required: []), outputSchema: GitEngine.outputSchema),
         .init(GitCommand.stashes, description: "List stashes without applying or modifying them.", inputSchema: .init(properties: [
             "limit": property(.integer, "Maximum stashes, from 1 through 500."),
             "includeStats": property(.boolean, "Include changed-file statistics.")
-        ], required: [])),
+        ], required: []), outputSchema: GitEngine.outputSchema),
         .init(GitCommand.submodules, description: "Read submodule commit and initialization status.", inputSchema: .init(properties: [
             "recursive": property(.boolean, "Include nested submodules.")
-        ], required: [])),
+        ], required: []), outputSchema: GitEngine.outputSchema),
         .init(GitCommand.configGet, description: "Read explicitly allowlisted local Git configuration keys.", inputSchema: .init(properties: [
             "keys": property(.array, itemsType: .string, "Allowed keys: remote.<name>.url, branch.<name>.remote, branch.<name>.merge, core.repositoryformatversion.")
         ], required: ["keys"]))
@@ -151,7 +160,7 @@ final class GitEngine: Engine {
             case .configGet: return try result(configGet(body))
             }
         } catch {
-            return ToolResult(["Git inspection failed: \(error.localizedDescription)"])
+            return encoded(GitToolFailure(errorCode: "git_inspection_failed", error: error.localizedDescription))
         }
     }
 }
@@ -165,7 +174,7 @@ private extension GitEngine {
 
     func result(_ command: ShellResult) throws -> ToolResult {
         guard command.succeeded else { throw GitToolError.commandFailed(command.output, command.status) }
-        return ToolResult([command.output.isEmpty ? "No results." : command.output])
+        return encoded(GitToolSuccess(output: command.output.isEmpty ? "No results." : command.output))
     }
 
     func repositoryInfo() throws -> ShellResult {
@@ -425,6 +434,27 @@ private extension GitEngine {
     func redactURL(_ value: String) -> String {
         guard let schemeRange = value.range(of: "://"), let atRange = value.range(of: "@", range: schemeRange.upperBound..<value.endIndex) else { return value }
         return String(value[..<schemeRange.upperBound]) + "***@" + String(value[atRange.upperBound...])
+    }
+}
+
+private struct GitToolSuccess: Encodable {
+    let ok = true
+    let output: String
+}
+
+private struct GitToolFailure: Encodable {
+    let ok = false
+    let errorCode: String
+    let error: String
+}
+
+private extension GitEngine {
+    func encoded<T: Encodable>(_ value: T) -> ToolResult {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let fallback = "{\"ok\":false,\"errorCode\":\"serialization_failed\",\"error\":\"Could not serialize Git response\"}"
+        let text = (try? String(data: encoder.encode(value), encoding: .utf8)) ?? fallback
+        return (try? ToolResult(structuredContent: value, text: [text])) ?? ToolResult([text])
     }
 }
 

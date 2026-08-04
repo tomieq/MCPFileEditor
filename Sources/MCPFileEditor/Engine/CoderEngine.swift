@@ -43,6 +43,15 @@ class CoderEngine: Engine {
 
     let instructions = "Manage files beneath the configured project root. Use project-relative paths. Tool results are structured JSON with ok/data or ok/errorCode/error. Prefer bounded read_file calls and use apply_patch or guarded replacements for edits."
 
+    private static let outputSchema = ToolParameter(type: .object,
+                                                    properties: [
+                                                        "ok": .init(type: .boolean, description: "Whether the operation succeeded."),
+                                                        "data": .init(type: .object, description: "Success payload."),
+                                                        "errorCode": .init(type: .string, description: "Machine-readable failure code."),
+                                                        "error": .init(type: .string, description: "Human-readable failure message.")
+                                                    ],
+                                                    required: ["ok"])
+
     func command(for rawValue: String) -> CoderCommand? {
         CoderCommand(rawValue: rawValue)
     }
@@ -57,15 +66,15 @@ class CoderEngine: Engine {
               inputSchema:
               ToolParameter(type: .object,
                             properties: [:],
-                            required: [])
-        ),
+                            required: []),
+              outputSchema: CoderEngine.outputSchema),
         .init(CoderCommand.list_paths,
               description: "List all project-relative file paths.",
               inputSchema:
               ToolParameter(type: .object,
                             properties: [:],
-                            required: [])
-        ),
+                            required: []),
+              outputSchema: CoderEngine.outputSchema),
         .init(CoderCommand.find_file,
               description: "Find a project-relative path by filename or partial name.",
               inputSchema:
@@ -73,8 +82,8 @@ class CoderEngine: Engine {
                             properties: [
                                 "filename": .init(type: .string, description: "Filename or partial filename to search for. No regex.")
                             ],
-                            required: ["filename"])
-        ),
+                            required: ["filename"]),
+              outputSchema: CoderEngine.outputSchema),
         .init(CoderCommand.read_file,
               description: "Read a bounded line range from one UTF-8 project-relative file. Defaults to 200 lines and 65,536 UTF-8 bytes; the structured response reports truncation and nextStartLine.",
               inputSchema:
@@ -85,8 +94,8 @@ class CoderEngine: Engine {
                                 "endLine": .init(type: .integer, description: "Last line to return, inclusive. Defaults to startLine plus 199."),
                                 "maxBytes": .init(type: .integer, description: "Maximum UTF-8 bytes of content, from 1 through 1,048,576. Defaults to 65,536.")
                             ],
-                            required: ["filepath"])
-        ),
+                            required: ["filepath"]),
+              outputSchema: CoderEngine.outputSchema),
         .init(CoderCommand.file_stat,
               description: "Read metadata for one project-relative path, including existence, type, byte size, dates, UTF-8/binary status, and optionally a SHA-256 hash.",
               inputSchema:
@@ -95,8 +104,8 @@ class CoderEngine: Engine {
                                 "filepath": .init(type: .string, description: "Project-relative path to inspect."),
                                 "includeHash": .init(type: .boolean, description: "Include a SHA-256 hash for regular files. Defaults to false.")
                             ],
-                            required: ["filepath"])
-        ),
+                            required: ["filepath"]),
+              outputSchema: CoderEngine.outputSchema),
         .init(CoderCommand.rename_file,
               description: "Rename or move one project-relative file. Creates missing destination directories.",
               inputSchema:
@@ -105,8 +114,8 @@ class CoderEngine: Engine {
                                 "oldFilepath": .init(type: .string, description: "Current project-relative path."),
                                 "newFilepath": .init(type: .string, description: "New project-relative path.")
                             ],
-                            required: ["oldFilepath", "newFilepath"])
-        ),
+                            required: ["oldFilepath", "newFilepath"]),
+              outputSchema: CoderEngine.outputSchema),
         .init(CoderCommand.override_file,
               description: "Replace the entire UTF-8 contents of an existing project-relative file.",
               inputSchema:
@@ -115,8 +124,8 @@ class CoderEngine: Engine {
                                 "filepath": .init(type: .string, description: "Project-relative path of the file to overwrite."),
                                 "content": .init(type: .string, description: "UTF-8 content to write.")
                             ],
-                            required: ["filepath", "content"])
-        ),
+                            required: ["filepath", "content"]),
+              outputSchema: CoderEngine.outputSchema),
         .init(CoderCommand.create_new_file,
               description: "Create a UTF-8 project-relative file and any missing parent directories. Fails if the file already exists.",
               inputSchema:
@@ -125,8 +134,8 @@ class CoderEngine: Engine {
                                 "filepath": .init(type: .string, description: "Project-relative path of the file to create."),
                                 "content": .init(type: .string, description: "UTF-8 content to write.")
                             ],
-                            required: ["filepath", "content"])
-        ),
+                            required: ["filepath", "content"]),
+              outputSchema: CoderEngine.outputSchema),
         .init(CoderCommand.delete_file,
               description: "Delete a file from the project.",
               inputSchema:
@@ -134,8 +143,8 @@ class CoderEngine: Engine {
                             properties: [
                                 "filepath": .init(type: .string, description: "Project-relative path of the file to delete.")
                             ],
-                            required: ["filepath"])
-        ),
+                            required: ["filepath"]),
+              outputSchema: CoderEngine.outputSchema),
         .init(CoderCommand.search_text,
               description: "Search project files line-by-line using literal text or a regular expression. Supports case sensitivity, include/exclude path globs, a result limit, and surrounding context lines. Returns structured results.",
               inputSchema:
@@ -149,8 +158,8 @@ class CoderEngine: Engine {
                                 "limit": .init(type: .integer, description: "Maximum results, from 1 through 1,000. Defaults to 100."),
                                 "contextLines": .init(type: .integer, description: "Context lines before and after each match, from 0 through 20. Defaults to 0.")
                             ],
-                            required: ["search"])
-        ),
+                            required: ["search"]),
+              outputSchema: CoderEngine.outputSchema),
         .init(CoderCommand.apply_patch,
               description: "Apply a unified diff to project-relative UTF-8 text files without requiring Git. Use ---/+++ headers; a/ and b/ path prefixes are optional. Standard @@ -oldStart,oldCount +newStart,newCount @@ headers are supported, as are minimal @@ context-matched hunks. Multiple hunks and files are supported. Hunks first match exactly, then may use unique nearby or whitespace-insensitive context matching. dryRun returns structured JSON with target paths, match positions, match strategies, and added/removed line counts.",
               inputSchema:
@@ -159,8 +168,8 @@ class CoderEngine: Engine {
                                 "patch": .init(type: .string, description: "A unified diff with --- and +++ file headers. Paths must be project-relative; a/ and b/ prefixes are optional. Prefer explicit line ranges; minimal @@ hunks need unique source context."),
                                 "dryRun": .init(type: .boolean, description: "Validate without writing and return structured JSON diagnostics. Defaults to false.")
                             ],
-                            required: ["patch"])
-        ),
+                            required: ["patch"]),
+              outputSchema: CoderEngine.outputSchema),
         .init(CoderCommand.replace_text,
               description: "Replace exact text in one project-relative UTF-8 file. For safety, the current number of matches must exactly equal expectedMatches (which defaults to 1). Set replaceAll only when every verified match should change. Use dryRun to validate and return structured JSON without writing.",
               inputSchema:
@@ -173,8 +182,8 @@ class CoderEngine: Engine {
                                 "replaceAll": .init(type: .boolean, description: "Replace every match after expectedMatches validation. Defaults to false."),
                                 "dryRun": .init(type: .boolean, description: "Validate without writing and return structured JSON. Defaults to false.")
                             ],
-                            required: ["filepath", "find", "replace"])
-        ),
+                            required: ["filepath", "find", "replace"]),
+              outputSchema: CoderEngine.outputSchema),
         .init(CoderCommand.replace_all,
               description: "Replace exact text across all cached tracked files. Use with caution: the cached total must exactly match expectedMatches, and all files are revalidated from disk before any write. Always dry-run first.",
               inputSchema:
@@ -185,8 +194,9 @@ class CoderEngine: Engine {
                                 "expectedMatches": .init(type: .integer, description: "Exact total number of matches required across cached project files."),
                                 "dryRun": .init(type: .boolean, description: "Validate without writing and return structured JSON. Defaults to false.")
                             ],
-                            required: ["find", "replace", "expectedMatches"])
-        )
+                            required: ["find", "replace", "expectedMatches"]),
+
+              outputSchema: CoderEngine.outputSchema)
     ]
 
     func call(_ command: String, body: HttpRequestBody) throws -> ToolResult {

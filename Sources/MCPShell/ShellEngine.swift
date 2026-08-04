@@ -16,6 +16,19 @@ final class ShellEngine: Engine {
         self.projectDirectory = projectDirectory
     }
 
+    private static let outputSchema = ToolParameter(type: .object,
+                                                    properties: [
+                                                        "ok": .init(type: .boolean, description: "Whether the shell command ran."),
+                                                        "exitStatus": .init(type: .integer, description: "Process exit status."),
+                                                        "timedOut": .init(type: .boolean, description: "Whether execution exceeded timeoutSeconds."),
+                                                        "truncated": .init(type: .boolean, description: "Whether output exceeded maxOutputBytes."),
+                                                        "outputBytes": .init(type: .integer, description: "Combined stdout and stderr bytes captured."),
+                                                        "output": .init(type: .string, description: "Captured stdout and stderr."),
+                                                        "errorCode": .init(type: .string, description: "Machine-readable failure code."),
+                                                        "error": .init(type: .string, description: "Human-readable failure message.")
+                                                    ],
+                                                    required: ["ok"])
+
     let instructions = "Run shell commands with the configured project directory as the fixed initial working directory. Use this only when no dedicated MCP tool fits. This tool may change files and run arbitrary executables. It is not a filesystem sandbox."
 
     let tools: [ToolsList.Schema] = [
@@ -26,7 +39,7 @@ final class ShellEngine: Engine {
                   "environment": .init(type: .object, description: "String-to-string environment variables for this command only."),
                   "timeoutSeconds": .init(type: .integer, description: "Maximum runtime in seconds, from 1 through 900; defaults to 300."),
                   "maxOutputBytes": .init(type: .integer, description: "Maximum combined stdout/stderr bytes to return, from 1 through 1,048,576; defaults to 65,536.")
-              ], required: ["command"]))
+              ], required: ["command"]), outputSchema: ShellEngine.outputSchema)
     ]
 
     func canHandle(_ command: String) -> Bool {
@@ -232,7 +245,8 @@ private extension ShellEngine {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         let fallback = "{\"ok\":false,\"errorCode\":\"serialization_failed\",\"error\":\"Could not serialize shell response\"}"
-        return ToolResult([(try? String(data: encoder.encode(value), encoding: .utf8)) ?? fallback])
+        let text = (try? String(data: encoder.encode(value), encoding: .utf8)) ?? fallback
+        return (try? ToolResult(structuredContent: value, text: [text])) ?? ToolResult([text])
     }
 }
 
