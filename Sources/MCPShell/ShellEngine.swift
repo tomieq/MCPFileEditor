@@ -11,9 +11,11 @@ private enum ShellCommand: String, CustomStringConvertible {
 
 final class ShellEngine: Engine {
     private let projectDirectory: ShellProjectDirectory
+    private let responseFormat: MCPShell.ResponseFormat
 
-    init(projectDirectory: ShellProjectDirectory) {
+    init(projectDirectory: ShellProjectDirectory, responseFormat: MCPShell.ResponseFormat) {
         self.projectDirectory = projectDirectory
+        self.responseFormat = responseFormat
     }
 
     private static let outputSchema = ToolParameter(type: .object,
@@ -246,7 +248,14 @@ private extension ShellEngine {
         encoder.outputFormatting = [.sortedKeys]
         let fallback = "{\"ok\":false,\"errorCode\":\"serialization_failed\",\"error\":\"Could not serialize shell response\"}"
         let text = (try? String(data: encoder.encode(value), encoding: .utf8)) ?? fallback
-        return (try? ToolResult(structuredContent: value, text: [text])) ?? ToolResult([text])
+        switch responseFormat {
+        case .text:
+            return ToolResult([text])
+        case .structured:
+            return (try? ToolResult(structuredContent: value)) ?? ToolResult([text])
+        case .both:
+            return (try? ToolResult(structuredContent: value, text: [text])) ?? ToolResult([text])
+        }
     }
 }
 

@@ -280,3 +280,25 @@ final class UnifiedPatchApplierTests: XCTestCase {
         XCTAssertEqual(results[0].contextAfter, ["third"])
     }
 }
+
+extension UnifiedPatchApplierTests {
+    func testResponseFormatsSelectTextStructuredOrBoth() throws {
+        let payload = FileTreeResult(tree: "example")
+
+        let text = try jsonObject(ToolResponseFactory(format: .text).success(payload))
+        XCTAssertNotNil(text["content"])
+        XCTAssertNil(text["structuredContent"])
+
+        let structured = try jsonObject(ToolResponseFactory(format: .structured).success(payload))
+        XCTAssertEqual((structured["structuredContent"] as? [String: Any])?["ok"] as? Bool, true)
+        XCTAssertEqual((structured["content"] as? [[String: String]])?.count, 0)
+
+        let both = try jsonObject(ToolResponseFactory(format: .both).success(payload))
+        XCTAssertEqual((both["structuredContent"] as? [String: Any])?["ok"] as? Bool, true)
+        XCTAssertEqual((both["content"] as? [[String: String]])?.count, 1)
+    }
+
+    private func jsonObject<T: Encodable>(_ value: T) throws -> [String: Any] {
+        try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(value)) as? [String: Any])
+    }
+}

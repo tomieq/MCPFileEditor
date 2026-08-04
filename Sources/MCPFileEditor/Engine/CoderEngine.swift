@@ -35,10 +35,14 @@ class CoderEngine: Engine {
     private let logger = Logger(CoderEngine.self)
     let folder: Folder
     let cache: FileCache
+    private let responses: ToolResponseFactory
+    private let responseFormat: MCPFileEditor.ResponseFormat
 
-    init(folder: Folder, cache: FileCache) {
+    init(folder: Folder, cache: FileCache, responseFormat: MCPFileEditor.ResponseFormat) {
         self.folder = folder
         self.cache = cache
+        self.responseFormat = responseFormat
+        self.responses = ToolResponseFactory(format: responseFormat)
     }
 
     let instructions = "Manage files beneath the configured project root. Use project-relative paths. Tool results are structured JSON with ok/data or ok/errorCode/error. Prefer bounded read_file calls and use apply_patch or guarded replacements for edits."
@@ -207,10 +211,10 @@ class CoderEngine: Engine {
         switch command {
         case .file_tree:
             logger.d("🗄️ Tree of project's files")
-            dto = toolSuccess(FileTreeResult(tree: folder.tree()))
+            dto = responses.success(FileTreeResult(tree: folder.tree()))
         case .list_paths:
             logger.d("🗄️ List project's files")
-            dto = toolSuccess(FilePathsResult(paths: folder.files()))
+            dto = responses.success(FilePathsResult(paths: folder.files()))
         case .find_file:
             struct File: Codable {
                 let filename: String
@@ -219,7 +223,7 @@ class CoderEngine: Engine {
             let filename = command.params?.arguments?.filename ?? ""
 
             logger.d("🔎 Find file \(filename)")
-            dto = toolSuccess(FilePathsResult(paths: folder.files().filter { $0.contains(filename) }))
+            dto = responses.success(FilePathsResult(paths: folder.files().filter { $0.contains(filename) }))
         case .read_file:
             struct File: Codable {
                 let filepath: String
@@ -239,9 +243,9 @@ class CoderEngine: Engine {
                                                    startLine: arguments?.startLine,
                                                    endLine: arguments?.endLine,
                                                    maxBytes: arguments?.maxBytes)
-                dto = toolSuccess(result)
+                dto = responses.success(result)
             } catch {
-                dto = toolFailure(error, code: "read_failed")
+                dto = responses.failure(error, code: "read_failed")
             }
         case .file_stat:
             struct Action: Codable {
@@ -253,11 +257,11 @@ class CoderEngine: Engine {
             let virtualPath = arguments?.filepath ?? ""
             do {
                 let filepath = try folder.projectURL(for: virtualPath)
-                dto = toolSuccess(try FileInspector().inspect(url: filepath,
-                                                              filepath: virtualPath,
-                                                              includeHash: arguments?.includeHash ?? false))
+                dto = responses.success(try FileInspector().inspect(url: filepath,
+                                                                    filepath: virtualPath,
+                                                                    includeHash: arguments?.includeHash ?? false))
             } catch {
-                dto = toolFailure(error, code: "stat_failed")
+                dto = responses.failure(error, code: "stat_failed")
             }
         case .rename_file:
             struct Action: Codable {
@@ -272,19 +276,19 @@ class CoderEngine: Engine {
                 let filepath = try folder.projectURL(for: virtualPath)
                 let newFilepath = try folder.projectURL(for: newVirtualpath)
                 guard FileManager.default.fileExists(atPath: filepath.path) else {
-                    dto = toolFailure("File not found at \(virtualPath)", code: "not_found")
+                    dto = responses.failure("File not found at \(virtualPath)", code: "not_found")
                     break
                 }
                 guard FileManager.default.fileExists(atPath: newFilepath.path).not else {
-                    dto = toolFailure("File already exists at \(newVirtualpath)", code: "already_exists")
+                    dto = responses.failure("File already exists at \(newVirtualpath)", code: "already_exists")
                     break
                 }
                 try FileManager.default.createDirectory(at: newFilepath.deletingLastPathComponent(), withIntermediateDirectories: true)
                 try FileManager.default.moveItem(at: filepath, to: newFilepath)
                 logger.d("💾⚙️ Rename filename from \(virtualPath) ➡️ \(newVirtualpath)")
-                dto = toolSuccess(FileMoveResult(oldFilepath: virtualPath, newFilepath: newVirtualpath))
+                dto = responses.success(FileMoveResult(oldFilepath: virtualPath, newFilepath: newVirtualpath))
             } catch {
-                dto = toolFailure(error, code: "move_failed")
+                dto = responses.failure(error, code: "move_failed")
             }
         case .override_file:
             struct Action: Codable {
@@ -298,14 +302,14 @@ class CoderEngine: Engine {
             do {
                 let filepath = try folder.projectURL(for: virtualPath)
                 guard FileManager.default.fileExists(atPath: filepath.path) else {
-                    dto = toolFailure("File not found at \(virtualPath)", code: "not_found")
+                    dto = responses.failure("File not found at \(virtualPath)", code: "not_found")
                     break
                 }
                 try content.write(to: filepath, atomically: true, encoding: .utf8)
                 logger.d("💾🟠 Override file \(virtualPath)")
-                dto = toolSuccess(FileWriteResult(filepath: virtualPath, changed: true))
+                dto = responses.success(FileWriteResult(filepath: virtualPath, changed: true))
             } catch {
-                dto = toolFailure(error, code: "write_failed")
+                dto = responses.failure(error, code: "write_failed")
             }
         case .create_new_file:
             struct Action: Codable {
@@ -319,15 +323,15 @@ class CoderEngine: Engine {
             do {
                 let filepath = try folder.projectURL(for: virtualPath)
                 guard FileManager.default.fileExists(atPath: filepath.path).not else {
-                    dto = toolFailure("File already exists at \(virtualPath)", code: "already_exists")
+                    dto = responses.failure("File already exists at \(virtualPath)", code: "already_exists")
                     break
                 }
                 try FileManager.default.createDirectory(at: filepath.deletingLastPathComponent(), withIntermediateDirectories: true)
                 try content.write(to: filepath, atomically: true, encoding: .utf8)
                 logger.d("💾🟢 Create file \(virtualPath)")
-                dto = toolSuccess(FileWriteResult(filepath: virtualPath, changed: true))
+                dto = responses.success(FileWriteResult(filepath: virtualPath, changed: true))
             } catch {
-                dto = toolFailure(error, code: "create_failed")
+                dto = responses.failure(error, code: "create_failed")
             }
         case .delete_file:
             struct Action: Codable {
@@ -338,14 +342,14 @@ class CoderEngine: Engine {
             do {
                 let filepath = try folder.projectURL(for: virtualPath)
                 guard FileManager.default.fileExists(atPath: filepath.path) else {
-                    dto = toolFailure("File not found at \(virtualPath)", code: "not_found")
+                    dto = responses.failure("File not found at \(virtualPath)", code: "not_found")
                     break
                 }
                 try FileManager.default.removeItem(at: filepath)
                 logger.d("💾🔴 Delete file \(virtualPath)")
-                dto = toolSuccess(FileDeleteResult(filepath: virtualPath, deleted: true))
+                dto = responses.success(FileDeleteResult(filepath: virtualPath, deleted: true))
             } catch {
-                dto = toolFailure(error, code: "delete_failed")
+                dto = responses.failure(error, code: "delete_failed")
             }
         case .search_text:
             struct Action: Codable {
@@ -370,11 +374,11 @@ class CoderEngine: Engine {
                                             limit: arguments?.limit ?? 100,
                                             contextLines: arguments?.contextLines ?? 0)
                 let matches = try cache.matching(options)
-                dto = toolSuccess(SearchTextResult(results: matches.results,
-                                                   limit: options.limit,
-                                                   truncated: matches.truncated))
+                dto = responses.success(SearchTextResult(results: matches.results,
+                                                         limit: options.limit,
+                                                         truncated: matches.truncated))
             } catch {
-                dto = toolFailure(error, code: "search_failed")
+                dto = responses.failure(error, code: "search_failed")
             }
         case .apply_patch:
             struct Action: Codable {
@@ -388,13 +392,13 @@ class CoderEngine: Engine {
             do {
                 let result = try UnifiedPatchApplier(rootURL: folder.realUrl).apply(patch, dryRun: dryRun)
                 logger.d("💾🩹 \(result.message)")
-                dto = toolSuccess(PatchToolResult(filesChanged: result.filesChanged,
-                                                  changed: !dryRun,
-                                                  dryRun: result.dryRun,
-                                                  paths: result.paths,
-                                                  report: result.report))
+                dto = responses.success(PatchToolResult(filesChanged: result.filesChanged,
+                                                        changed: !dryRun,
+                                                        dryRun: result.dryRun,
+                                                        paths: result.paths,
+                                                        report: result.report))
             } catch {
-                dto = toolFailure(error, code: "patch_failed")
+                dto = responses.failure(error, code: "patch_failed")
             }
         case .replace_text:
             struct Action: Codable {
@@ -418,9 +422,9 @@ class CoderEngine: Engine {
                     dryRun: arguments?.dryRun ?? false
                 )
                 logger.d("💾🔁 \(result.message)")
-                dto = toolSuccess(result)
+                dto = responses.success(result)
             } catch {
-                dto = toolFailure(error, code: "replace_failed")
+                dto = responses.failure(error, code: "replace_failed")
             }
         case .replace_all:
             struct Action: Codable {
@@ -443,9 +447,9 @@ class CoderEngine: Engine {
                     dryRun: dryRun
                 )
                 logger.d("💾🔁 \(result.message)")
-                dto = toolSuccess(result)
+                dto = responses.success(result)
             } catch {
-                dto = toolFailure(error, code: "replace_failed")
+                dto = responses.failure(error, code: "replace_failed")
             }
         }
         return dto
