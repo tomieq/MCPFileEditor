@@ -8,7 +8,6 @@ import Foundation
 import Logger
 import SwiftExtensions
 import Env
-import FileTree
 
 enum FolderError: LocalizedError {
     case invalidProjectPath(String)
@@ -48,10 +47,7 @@ class Folder {
     }
 
     func tree() -> String {
-        FileTree(realUrl, configuration: .init(allowedFileExtensions: allowedExtensions,
-                                               showsEmptyFolders: false,
-                                               excludedFolders: excludedFolders))
-            .tree
+        (realUrl.relativePath + "\n" + self.crawlTree(url: realUrl, prefix: ""))
             .replacingOccurrences(of: realUrl.path().dropLast(), with: ".")
     }
 
@@ -81,7 +77,9 @@ class Folder {
     }
 
     func isAllowedFile(_ url: URL) -> Bool {
-        allowedExtensions.isEmpty || allowedExtensions.contains(url.pathExtension)
+        guard allowedExtensions.isEmpty.not else { return true }
+        return allowedExtensions.contains(url.pathExtension)
+            || (url.pathExtension.isEmpty && allowedExtensions.contains(url.lastPathComponent))
     }
 
     private func crawl(url: URL, prefix: String) -> [String] {
@@ -95,10 +93,39 @@ class Folder {
                 let newPrefix = prefix + filename + "/"
                 let fileUrl = url.appendingPathComponent(filename)
                 output.append(contentsOf: self.crawl(url: fileUrl, prefix: newPrefix))
-            } else if isAllowedFile(fileUrl) {
+            } else if isDir.not, isAllowedFile(fileUrl) {
                 output.append(prefix + filename)
             }
         }
         return output
+    }
+
+    private func crawlTree(url: URL, prefix: String) -> String {
+        let visibleFiles = self.visibleFiles(in: url)
+        var output = ""
+
+        visibleFiles.enumerated().forEach { index, fileUrl in
+            let isDirectory = (try? fileUrl.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
+            let isLast = index == visibleFiles.count - 1
+            let graphic = isLast ? "└──" : "├──"
+            let filename = fileUrl.lastPathComponent
+            output.append("\(prefix)\(graphic) \(filename) \n")
+
+            if isDirectory {
+                let newPrefix = prefix + (isLast ? "    " : "│   ")
+                output.append(self.crawlTree(url: fileUrl, prefix: newPrefix))
+            }
+        }
+        return output
+    }
+
+    private func visibleFiles(in url: URL) -> [URL] {
+        let files = (try? fileManager.contentsOfDirectory(at: url, includingPropertiesForKeys: [])) ?? []
+        return files.filter { fileUrl in
+            let isDirectory = (try? fileUrl.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
+            guard isDirectory else { return isAllowedFile(fileUrl) }
+            return excludedFolders.contains(fileUrl.lastPathComponent).not
+                && visibleFiles(in: fileUrl).isEmpty.not
+        }
     }
 }

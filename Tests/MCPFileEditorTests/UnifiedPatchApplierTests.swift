@@ -226,6 +226,19 @@ final class UnifiedPatchApplierTests: XCTestCase {
         XCTAssertThrowsError(try folder.projectURL(for: "external/outside.txt"))
     }
 
+    func testFolderIncludesExplicitlyAllowedExtensionlessFiles() throws {
+        try "pipeline".write(to: directory.appendingPathComponent("Jenkinsfile"), atomically: true, encoding: .utf8)
+        try "ignore".write(to: directory.appendingPathComponent("README"), atomically: true, encoding: .utf8)
+        try "source".write(to: directory.appendingPathComponent("main.swift"), atomically: true, encoding: .utf8)
+        let folder = Folder(config: .init(projectPath: directory.path, fileExtensions: "swift,Jenkinsfile"))
+
+        XCTAssertTrue(folder.files().contains("Jenkinsfile"))
+        XCTAssertTrue(folder.files().contains("main.swift"))
+        XCTAssertFalse(folder.files().contains("README"))
+        XCTAssertTrue(folder.tree().contains("Jenkinsfile"))
+        XCTAssertFalse(folder.tree().contains("README"))
+    }
+
     func testFileReaderBoundsLinesAndBytes() throws {
         let file = directory.appendingPathComponent("example.txt")
         try "one\ntwo\nthree\nfour\n".write(to: file, atomically: true, encoding: .utf8)
